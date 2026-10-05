@@ -44,6 +44,4 @@ No compositor is required by either theme.
 
 ## Credits
 
-Fork/update inspired by [xct/kali-clean](https://github.com/xct/kali-clean) and [Pebl3/kali-clean](https://github.com/Pebl3/kali-clean). Additional visual direction was informed by the i3 ricing community on r/unixporn.
-
-Optional Unsplash wallpapers: [Stephan Seeber](https://unsplash.com/photos/z2D7n5gaCm0) and [cheng feng](https://unsplash.com/photos/psdV2Rl-GvU), used under the Unsplash License.
+Fork/update inspired by [xct/kali-clean](https://github.com/xct/kali-clean) and [Pebl3/kali-clean](https://github.com/Pebl3/kali-clean).
