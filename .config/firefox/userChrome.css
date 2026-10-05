@@ -1,0 +1,62 @@
+/* kali-clean Firefox chrome. Theme variables are refreshed by Mod+Shift+T. */
+@import url("kali-clean-theme.css");
+
+:root {
+  --toolbar-bgcolor: var(--kc-bg) !important;
+  --toolbar-color: var(--kc-fg) !important;
+  --toolbar-field-background-color: var(--kc-surface) !important;
+  --toolbar-field-color: var(--kc-fg) !important;
+  --toolbar-field-border-color: var(--kc-border) !important;
+  --lwt-accent-color: var(--kc-bg) !important;
+  --lwt-text-color: var(--kc-fg) !important;
+  --tab-selected-bgcolor: var(--kc-surface-2) !important;
+  --tab-selected-textcolor: var(--kc-fg) !important;
+  --arrowpanel-background: var(--kc-surface) !important;
+  --arrowpanel-color: var(--kc-fg) !important;
+  --arrowpanel-border-color: var(--kc-border) !important;
+}
+
+#navigator-toolbox,
+#nav-bar,
+#TabsToolbar,
+#PersonalToolbar {
+  background: var(--kc-bg) !important;
+  color: var(--kc-fg) !important;
+  box-shadow: none !important;
+}
+
+#navigator-toolbox { border-bottom: 1px solid var(--kc-border) !important; }
+
+.tab-background,
+#urlbar-background,
+.searchbar-textbox,
+.toolbarbutton-1 {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+}
+
+.tabbrowser-tab[selected] .tab-background {
+  background: var(--kc-surface-2) !important;
+  outline: 1px solid var(--kc-accent) !important;
+  outline-offset: -1px !important;
+}
+
+.tabbrowser-tab:not([selected]) .tab-background { background: var(--kc-bg) !important; }
+
+#urlbar-background {
+  background: var(--kc-surface) !important;
+  border: 1px solid var(--kc-border) !important;
+}
+
+toolbarbutton:hover > .toolbarbutton-icon,
+toolbarbutton:hover > .toolbarbutton-text,
+toolbarbutton:hover > .toolbarbutton-badge-stack {
+  background-color: var(--kc-surface-2) !important;
+}
+
+menupopup,
+panel {
+  --panel-background: var(--kc-surface) !important;
+  --panel-color: var(--kc-fg) !important;
+  --panel-border-color: var(--kc-border) !important;
+}

@@ -1,0 +1,55 @@
+[global]
+    monitor = 0
+    follow = mouse
+    width = 360
+    height = (0, 130)
+    origin = top-right
+    offset = (14, 42)
+    notification_limit = 5
+    progress_bar = true
+    progress_bar_height = 5
+    progress_bar_frame_width = 0
+    progress_bar_min_width = 160
+    progress_bar_max_width = 320
+    transparency = 0
+    separator_height = 1
+    padding = 11
+    horizontal_padding = 13
+    text_icon_padding = 9
+    frame_width = 1
+    frame_color = "#2a2f37"
+    separator_color = frame
+    font = Geist Mono 10
+    line_height = 2
+    markup = full
+    format = "<b>%s</b>\n%b"
+    alignment = left
+    vertical_alignment = center
+    word_wrap = yes
+    ellipsize = middle
+    icon_position = left
+    max_icon_size = 32
+    history_length = 20
+    browser = /usr/bin/xdg-open
+    corner_radius = 0
+    mouse_left_click = close_current
+    mouse_middle_click = do_action, close_current
+    mouse_right_click = close_all
+
+[urgency_low]
+    background = "#08090b"
+    foreground = "#808791"
+    frame_color = "#20242a"
+    timeout = 4
+
+[urgency_normal]
+    background = "#101216"
+    foreground = "#d8dce2"
+    frame_color = "#2a2f37"
+    timeout = 6
+
+[urgency_critical]
+    background = "#170d10"
+    foreground = "#f0f2f4"
+    frame_color = "#a15a63"
+    timeout = 0

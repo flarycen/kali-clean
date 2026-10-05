@@ -1,0 +1,10 @@
+{
+  "default": "#9aa1ab",
+  "bright": "#d8dce2",
+  "dim": "#666d77",
+  "cpu": "#9aa1ab",
+  "memory": "#9aa1ab",
+  "disk": "#9aa1ab",
+  "vpn": "#d8dce2",
+  "clock": "#d8dce2"
+}

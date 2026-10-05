@@ -1,0 +1,11 @@
+/* Match Firefox's empty/home surfaces to the graphite desktop. */
+
+@-moz-document url("about:blank"), url("about:home"), url("about:newtab") {
+  :root,
+  body,
+  .outer-wrapper,
+  .activity-stream {
+    background: #090a0c !important;
+    color: #d6dae0 !important;
+  }
+}

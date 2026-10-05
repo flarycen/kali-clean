@@ -1,0 +1,43 @@
+configuration {
+    font: "Geist Mono 11";
+    show-icons: true;
+    icon-theme: "Papirus-Dark";
+    drun-display-format: "{name}";
+}
+* {
+    bg: #070914;
+    surface: #0d1120;
+    surface2: #141a2e;
+    border: #2b3250;
+    fg: #dbe7ff;
+    dim: #7d89a8;
+    cyan: #66e3ff;
+    violet: #9b7cff;
+    selected-fg: #05070c;
+    background-color: transparent;
+    text-color: @fg;
+}
+window {
+    width: 42%;
+    border: 2px;
+    border-color: @cyan;
+    border-radius: 8px;
+    background-color: @bg;
+    padding: 16px;
+}
+mainbox { spacing: 12px; children: [ inputbar, listview ]; }
+inputbar {
+    background-color: @surface;
+    border: 1px;
+    border-color: @border;
+    border-radius: 6px;
+    padding: 11px 13px;
+    children: [ prompt, entry ];
+}
+prompt { text-color: @cyan; padding: 0px 12px 0px 0px; }
+entry { text-color: @fg; placeholder: "search applications"; placeholder-color: @dim; }
+listview { lines: 8; columns: 2; fixed-height: false; scrollbar: false; spacing: 5px; }
+element { padding: 10px 12px; border: 1px; border-color: transparent; border-radius: 6px; background-color: transparent; text-color: @fg; }
+element selected { background-color: @surface2; border-color: @violet; text-color: @fg; }
+element-icon { size: 22px; margin: 0px 10px 0px 0px; background-color: transparent; }
+element-text { vertical-align: 0.5; background-color: transparent; text-color: inherit; }
