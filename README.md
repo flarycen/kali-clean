@@ -11,7 +11,7 @@ Built with help from OpenAI's GPT-5.6 Sol. **Review `install.sh` and the dotfile
 Run as your normal user, **not root**:
 
 ```bash
-git clone https://github.com/USER/kali-clean
+git clone https://github.com/flarycen/kali-clean
 cd kali-clean
 ./install.sh
 ```
