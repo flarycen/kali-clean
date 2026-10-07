@@ -43,6 +43,7 @@ bindkey -e
 # Oh My Zsh is installed by install.sh, but keep the shell fully usable if it is absent.
 export ZSH="$HOME/.oh-my-zsh"
 ZSH_THEME=""
+DISABLE_MAGIC_FUNCTIONS=true
 plugins=(git sudo extract colored-man-pages)
 [[ -r "$ZSH/oh-my-zsh.sh" ]] && source "$ZSH/oh-my-zsh.sh"
 
