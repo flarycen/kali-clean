@@ -2,8 +2,11 @@
 
 Minimal i3 workstation for Kali, tailored for HTB / HackSmarter / CPTS-style labs. Flat, fast, dark, and intentionally compositor-free for reliable VMware use.
 
+## Dark Theme
 ![Dark-Theme](dark.png)
 ![Dark-Theme-tmux](dark-tmux.png)
+
+## Neon Theme
 ![Neon-Theme](neon.png)
 ![Neon-Theme-tmux](neon-tmux.png)
 
