@@ -38,10 +38,9 @@ The toolset includes the Kali-default stack plus CPTS/HTB essentials such as Sec
 
 ## Themes
 ### Dark Theme
+**Obsidian** is the default: monochrome, square, quiet, Pebl3-inspired. 
 ![Dark-Theme](dark.png)
 ![Dark-Theme-tmux](dark-tmux.png)
-
-**Obsidian** is the default: monochrome, square, quiet, Pebl3-inspired. 
 
 ### Neon Theme
 **Neon** keeps the same layout and reliability but adds controlled cyan/violet accents across i3, tmux, Alacritty, Rofi, Dunst, the shell prompt and Firefox chrome.
