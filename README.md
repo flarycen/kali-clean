@@ -2,14 +2,6 @@
 
 Minimal i3 workstation for Kali, tailored for HTB / HackSmarter / CPTS-style labs. Flat, fast, dark, and intentionally compositor-free for reliable VMware use.
 
-## Dark Theme
-![Dark-Theme](dark.png)
-![Dark-Theme-tmux](dark-tmux.png)
-
-## Neon Theme
-![Neon-Theme](neon.png)
-![Neon-Theme-tmux](neon-tmux.png)
-
 ## ⚠️ Warning
 
 Built with help from OpenAI's GPT-5.6 Sol. **Review `install.sh` and the dotfiles yourself before running them.** The installer uses `sudo` for Kali packages/system changes and installs offensive-security tooling intended only for systems and labs you are authorized to test.
@@ -45,8 +37,16 @@ Choose a wallpaper, wait for the success message, reboot, then select **i3** fro
 The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE tooling, NetExec, Certipy, Evil-WinRM / evil-winrm-py, Impacket, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients.
 
 ## Themes
+### Dark Theme
+![Dark-Theme](dark.png)
+![Dark-Theme-tmux](dark-tmux.png)
 
-**Obsidian** is the default: monochrome, square, quiet, Pebl3-inspired. **Neon** keeps the same layout and reliability but adds controlled cyan/violet accents across i3, tmux, Alacritty, Rofi, Dunst, the shell prompt and Firefox chrome.
+**Obsidian** is the default: monochrome, square, quiet, Pebl3-inspired. 
+
+### Neon Theme
+**Neon** keeps the same layout and reliability but adds controlled cyan/violet accents across i3, tmux, Alacritty, Rofi, Dunst, the shell prompt and Firefox chrome.
+![Neon-Theme](neon.png)
+![Neon-Theme-tmux](neon-tmux.png)
 
 No compositor is required by either theme.
 
