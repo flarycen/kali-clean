@@ -2,6 +2,11 @@
 
 Minimal i3 workstation for Kali, tailored for HTB / HackSmarter / CPTS-style labs. Flat, fast, dark, and intentionally compositor-free for reliable VMware use.
 
+![Dark-Theme](dark.png)
+![Dark-Theme-tmux](dark-tmux.png)
+![Neon-Theme](neon.png)
+![Neon-Theme-tmux](neon-tmux.png)
+
 ## ⚠️ Warning
 
 Built with help from OpenAI's GPT-5.6 Sol. **Review `install.sh` and the dotfiles yourself before running them.** The installer uses `sudo` for Kali packages/system changes and installs offensive-security tooling intended only for systems and labs you are authorized to test.
