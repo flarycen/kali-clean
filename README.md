@@ -37,6 +37,7 @@ Choose a wallpaper, wait for the success message, reboot, then select **i3** fro
 The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE tooling, NetExec, Certipy, Evil-WinRM / evil-winrm-py, Impacket, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients.
 
 ## Themes
+No compositor is required by either theme.
 ### Dark Theme
 **Obsidian** is the default: monochrome, square, quiet, Pebl3-inspired. 
 ![Dark-Theme](dark.png)
@@ -46,8 +47,6 @@ The toolset includes the Kali-default stack plus CPTS/HTB essentials such as Sec
 **Neon** keeps the same layout and reliability but adds controlled cyan/violet accents across i3, tmux, Alacritty, Rofi, Dunst, the shell prompt and Firefox chrome.
 ![Neon-Theme](neon.png)
 ![Neon-Theme-tmux](neon-tmux.png)
-
-No compositor is required by either theme.
 
 ## Credits
 
