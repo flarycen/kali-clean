@@ -632,6 +632,48 @@ EOF
 }
 
 
+readonly PY_NAME_MARKER='# kali-clean managed .py entry point'
+
+# Expose "<tool>.py" (the spelling used by Impacket's README and HTB Academy)
+# next to the short name. This must be a small wrapper, NOT a symlink: Kali's
+# /usr/bin/impacket-* launchers derive the script to run from the name they
+# were invoked as, so a symlink called secretsdump.py would try to open
+# secretsdump.py.py.
+install_py_name_wrapper() {
+    local short=$1 target=$2 name dest existing
+    name="$short.py"
+    dest="$LOCAL_BIN/$name"
+
+    [[ "$short" != */* && -n "$short" ]] || return 0
+    [[ -x "$target" ]] || return 0
+    mkdir -p "$LOCAL_BIN"
+
+    if [[ -L "$dest" ]]; then
+        # Earlier broken symlinks pointing at an impacket launcher are ours to fix.
+        case "$(readlink -- "$dest" 2>/dev/null || true)" in
+            */impacket-*) rm -f -- "$dest" ;;
+            *) warn "Leaving existing user command untouched: $dest"; return 0 ;;
+        esac
+    elif [[ -e "$dest" ]]; then
+        # Refresh wrappers we (or the standalone add-py-names.sh) created; never
+        # touch anything else.
+        if grep -qE "^(${PY_NAME_MARKER}|# made by add-py-names\.sh)\$" "$dest" 2>/dev/null; then
+            rm -f -- "$dest"
+        else
+            warn "Leaving existing user command untouched: $dest"
+            return 0
+        fi
+    fi
+
+    # Do not shadow a real <tool>.py elsewhere in PATH (e.g. a pipx Impacket).
+    existing="$(command -v -- "$name" 2>/dev/null || true)"
+    [[ -z "$existing" || "$existing" == "$dest" ]] || return 0
+
+    printf '#!/usr/bin/env bash\n%s\nexec %q "$@"\n' "$PY_NAME_MARKER" "$target" > "$dest"
+    chmod 0755 "$dest"
+}
+
+
 install_impacket_shortcuts() {
     local pkg source base short lower prefixed example wrapper resolved
     local -a sources=()
@@ -677,6 +719,13 @@ install_impacket_shortcuts() {
         resolved="$(command -v -- "$short" 2>/dev/null || true)"
         [[ -n "$resolved" ]] && printf '%s\t%s\n' "$short" "$resolved" >> "$manifest"
 
+        # secretsdump.py, GetUserSPNs.py, ... (original casing only). This also
+        # covers names whose short form collides with a system command, so
+        # smbclient.py / mimikatz.py / net.py reach Impacket, not Samba etc.
+        install_py_name_wrapper "$short" "$source"
+        resolved="$(command -v -- "$short.py" 2>/dev/null || true)"
+        [[ -n "$resolved" ]] && printf '%s\t%s\n' "$short.py" "$resolved" >> "$manifest"
+
         # Also add a lowercase form when it is safe. This makes commands such as
         # GetUserSPNs usable as getuserspns without shadowing existing utilities.
         lower="$(printf '%s' "$short" | tr '[:upper:]' '[:lower:]')"
@@ -705,7 +754,7 @@ install_impacket_shortcuts() {
     done
 
     sort -u -o "$manifest" "$manifest" 2>/dev/null || true
-    ok 'Impacket short commands are available through ~/.local/bin.'
+    ok 'Impacket short commands (and <tool>.py names) are available through ~/.local/bin.'
 }
 
 
@@ -721,7 +770,15 @@ verify_tool_command_surface() {
 
     for cmd in "${required[@]}"; do
         command -v -- "$cmd" >/dev/null 2>&1 || die "Tool command is not reachable through PATH: $cmd"
+        command -v -- "$cmd.py" >/dev/null 2>&1 || die "Tool command is not reachable through PATH: $cmd.py"
     done
+
+    # A .py name must reach the real script, not "<tool>.py.py" (the symlink bug).
+    local py_check
+    py_check="$(cd / && secretsdump.py -h 2>&1 || true)"
+    if [[ "$py_check" == *'.py.py'* ]]; then
+        die 'secretsdump.py resolves to a broken .py.py path.'
+    fi
 
     # Verify the commands resolve without relying on the current directory.
     ( cd / && command -v wmiexec >/dev/null && command -v smbexec >/dev/null && command -v psexec >/dev/null ) || \
