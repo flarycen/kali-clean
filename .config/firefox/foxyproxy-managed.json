@@ -1,0 +1,65 @@
+{
+  "name": "foxyproxy@eric.h.jung",
+  "description": "kali-clean FoxyProxy presets (Burp and SOCKS pivots)",
+  "type": "storage",
+  "data": {
+    "mode": "disable",
+    "sync": false,
+    "data": [
+      {
+        "active": true,
+        "title": "Burp 127.0.0.1:8080",
+        "type": "http",
+        "hostname": "127.0.0.1",
+        "port": "8080",
+        "username": "",
+        "password": "",
+        "cc": "",
+        "city": "",
+        "color": "#ff6633",
+        "pac": "",
+        "pacString": "",
+        "proxyDNS": true,
+        "include": [],
+        "exclude": [],
+        "tabProxy": []
+      },
+      {
+        "active": true,
+        "title": "SOCKS5 127.0.0.1:9050 (ssh -D / proxychains)",
+        "type": "socks5",
+        "hostname": "127.0.0.1",
+        "port": "9050",
+        "username": "",
+        "password": "",
+        "cc": "",
+        "city": "",
+        "color": "#a1a1aa",
+        "pac": "",
+        "pacString": "",
+        "proxyDNS": true,
+        "include": [],
+        "exclude": [],
+        "tabProxy": []
+      },
+      {
+        "active": true,
+        "title": "SOCKS5 127.0.0.1:1080 (chisel)",
+        "type": "socks5",
+        "hostname": "127.0.0.1",
+        "port": "1080",
+        "username": "",
+        "password": "",
+        "cc": "",
+        "city": "",
+        "color": "#71717a",
+        "pac": "",
+        "pacString": "",
+        "proxyDNS": true,
+        "include": [],
+        "exclude": [],
+        "tabProxy": []
+      }
+    ]
+  }
+}

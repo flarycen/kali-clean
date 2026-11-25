@@ -196,6 +196,15 @@ def cmd_sync(shell_pid: str) -> int:
     tmux_sets: list[tuple[str, str]] = []
     tmux_unsets: list[str] = []
 
+    # A name only stays "ignored" (unpersistenv) or "inherited at startup"
+    # while it still exists here. Once it has been unset, exporting it again
+    # is a fresh, deliberate export and must be shared again.
+    ignored &= set(current)
+    still_inherited = baseline & set(current)
+    if still_inherited != baseline:
+        baseline = still_inherited
+        atomic_json(baseline_file, sorted(baseline))
+
     with locked_file() as lock:
         remote = load_persistent()
         final = dict(remote)
@@ -224,7 +233,7 @@ def cmd_sync(shell_pid: str) -> int:
                 else:
                     final.pop(name, None)
                     new_last.pop(name, None)
-                    ignored.add(name)
+                    ignored.discard(name)
                     tmux_unsets.append(name)
             elif remote_changed:
                 if remote_exists:
@@ -235,7 +244,7 @@ def cmd_sync(shell_pid: str) -> int:
                 else:
                     shell_actions.append(shell_unset(name))
                     new_last.pop(name, None)
-                    ignored.add(name)
+                    ignored.discard(name)
                     tmux_unsets.append(name)
             elif remote_exists:
                 new_last[name] = remote[name]

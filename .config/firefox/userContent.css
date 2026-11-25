@@ -1,11 +1,11 @@
-/* Match Firefox's empty/home surfaces to the graphite desktop. */
+/* kali-clean — near-black blank and new-tab pages. */
 
-@-moz-document url("about:blank"), url("about:home"), url("about:newtab") {
+@-moz-document url("about:blank"), url("about:home"), url("about:newtab"), url("about:privatebrowsing") {
   :root,
   body,
   .outer-wrapper,
   .activity-stream {
-    background: #090a0c !important;
-    color: #d6dae0 !important;
+    background-color: #060606 !important;
+    color: #f5f5f5 !important;
   }
 }

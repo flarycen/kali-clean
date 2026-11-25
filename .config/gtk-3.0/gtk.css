@@ -1,0 +1,48 @@
+/* kali-clean — near-black surfaces on top of Adwaita-dark (Thunar, dialogs). */
+@define-color theme_bg_color #0a0a0a;
+@define-color theme_base_color #060606;
+@define-color theme_fg_color #f5f5f5;
+@define-color theme_text_color #f5f5f5;
+@define-color theme_selected_bg_color #3f3f46;
+@define-color theme_selected_fg_color #ffffff;
+@define-color borders #1f1f1f;
+
+window, dialog, .background {
+    background-color: #0a0a0a;
+    color: #f5f5f5;
+}
+
+.view, iconview, treeview, textview text, list, placessidebar, placessidebar list,
+.sidebar, scrolledwindow > viewport {
+    background-color: #060606;
+    color: #f5f5f5;
+}
+
+headerbar, .titlebar, menubar, toolbar, .toolbar, statusbar, .statusbar {
+    background-color: #0a0a0a;
+    background-image: none;
+    border-color: #1f1f1f;
+    box-shadow: none;
+}
+
+.view:selected, iconview:selected, treeview:selected, list row:selected,
+placessidebar row:selected, .sidebar row:selected, row:selected {
+    background-color: #3f3f46;
+    color: #ffffff;
+}
+
+entry {
+    background-color: #060606;
+    border-color: #1f1f1f;
+    color: #f5f5f5;
+}
+
+menu, .menu, popover, popover > contents, .popover {
+    background-color: #0a0a0a;
+    border-color: #1f1f1f;
+}
+
+paned > separator {
+    background-color: #1f1f1f;
+    background-image: none;
+}

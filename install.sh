@@ -1,1021 +1,1055 @@
 #!/usr/bin/env bash
-# kali-clean — one-shot Kali/i3 workstation installer.
+# kali-clean — Kali i3 workstation for HTB / CPTS-style labs and exams.
 # Inspired by xct/kali-clean and Pebl3/kali-clean.
-# Run as your normal Kali user, never as root.
+#
+# Run as your normal user (never root):   ./install.sh
+#
+# Safety rules this script follows:
+#   * APT never removes a package: every transaction is simulated first and
+#     run with --no-remove; anything that would remove something is skipped.
+#   * Installed packages are not upgraded (--no-upgrade); existing config
+#     files are kept (--force-confold).
+#   * No system configuration changes (only `chsh` to zsh, if needed), no
+#     services, no boot/network changes. Everything else lives in your home
+#     directory, and replaced dotfiles are backed up.
+#   * Only the desktop basics are mandatory. Every tool is best-effort: a
+#     missing package or a failed download is reported, never fatal.
+#   * Safe to re-run: existing tools are kept, missing ones are added.
 
 set -Eeuo pipefail
 IFS=$'\n\t'
+umask 022
 
-readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+readonly SCRIPT_DIR
 readonly STATE_DIR="${XDG_STATE_HOME:-$HOME/.local/state}/kali-clean"
 readonly LOG_FILE="$STATE_DIR/install.log"
+readonly ISSUES_FILE="$STATE_DIR/issues.txt"
 readonly BACKUP_ROOT="$STATE_DIR/backups"
 readonly LOCAL_BIN="$HOME/.local/bin"
-readonly MANAGED_BIN="$HOME/.local/share/kali-clean/bin"
-readonly TOOLS_DIR="$HOME/tools"
-readonly LAB_ROOT="$HOME/labs"
+readonly KC_SHARE="$HOME/.local/share/kali-clean"
+readonly MANAGED_BIN="$KC_SHARE/bin"
+readonly TOOLS="$HOME/tools"
+readonly WRAPPER_MARK='# kali-clean managed wrapper'
+readonly SYSTEM_PATH='/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
 
-WALLPAPER_CHOICE='default.png'
+WALLPAPER_CHOICE='contour.png'
+BACKUP_DIR=''
+SUDO_KEEPALIVE_PID=''
 
-# Required package names are centralized so the installer can validate the
-# entire Kali package surface before it changes anything. Optional packages are
-# best-effort and never make an otherwise healthy rolling snapshot fail.
-readonly -a SYSTEM_PACKAGES=(
-    # Do not request Debian's plain i3lock here. kali-desktop-i3 depends on
-    # betterlockscreen -> i3lock-color, which Conflicts with plain i3lock.
-    kali-desktop-i3 kali-linux-default
-    alacritty firefox-esr zsh tmux ncurses-term pipx python3 python3-pip python3-venv python3-dev
-    ca-certificates curl wget git rsync unzip zip jq xz-utils tar gzip gnupg file xdg-utils iproute2
-    build-essential pkg-config gcc make golang-go cargo nodejs npm ruby-full
-    feh rofi picom dunst libnotify-bin lxpolkit thunar flameshot network-manager-gnome
-    arc-theme papirus-icon-theme fonts-jetbrains-mono fonts-font-awesome
-    xclip xsel xdotool unclutter pulseaudio-utils playerctl brightnessctl
-    openvpn tcpdump network-manager-openvpn network-manager-openvpn-gnome wireguard-tools
-    fzf ripgrep bat fd-find
+# ============================================================== packages
+# Mandatory: without these the desktop cannot work. Checked before anything changes.
+readonly -a CORE_PACKAGES=(
+    kali-desktop-i3 alacritty zsh tmux ncurses-term rofi feh dunst libnotify-bin
+    xclip xdotool x11-xserver-utils fonts-jetbrains-mono
+    git curl ca-certificates jq unzip python3 python3-venv pipx file iproute2
 )
 
-readonly -a QOL_PACKAGES=(
-    eza zoxide direnv blueman maim neovim btop ranger tree pv shellcheck fastfetch python-is-python3
+# Desktop polish and everyday tools (best-effort).
+readonly -a DESKTOP_PACKAGES=(
+    papirus-icon-theme flameshot thunar lxpolkit network-manager-gnome unclutter
+    xsel pulseaudio-utils playerctl brightnessctl gnome-themes-extra librsvg2-common
+    zsh-autosuggestions fzf zoxide bat fd-find ripgrep eza btop htop neovim tree
+    pv ncdu shellcheck ansifilter python-is-python3 zip 7zip p7zip-full xxd
+    openvpn wireguard-tools network-manager-openvpn network-manager-openvpn-gnome
+    bind9-dnsutils whois traceroute net-tools tcpdump faketime ntpsec-ntpdate
+    ruby
 )
 
+# Kali's own default toolset first; it covers most of what the list below names.
+readonly -a KALI_META_PACKAGES=( kali-linux-default )
+
+# HTB / CPTS toolset (best-effort; anything not in your Kali snapshot is reported).
 readonly -a SECURITY_PACKAGES=(
-    nmap masscan rustscan autorecon netcat-traditional ncat nfs-common
-    ffuf gobuster feroxbuster dirsearch wfuzz whatweb nikto burpsuite wpscan sqlmap commix
-    hydra john hashcat responder smbclient smbmap enum4linux-ng samba-common-bin
-    impacket-scripts python3-impacket netexec evil-winrm evil-winrm-py certipy-ad coercer
-    bloodhound bloodhound-ce-python bloodyad
-    krb5-user krb5-config libkrb5-dev ldap-utils libsasl2-modules-gssapi-mit bind9-dnsutils
-    chisel ligolo-ng socat rlwrap sshpass proxychains4 sshuttle freerdp-x11
-    dnsrecon snmp onesixtyone smtp-user-enum swaks
-    redis-tools default-mysql-client postgresql-client sqlite3
-    penelope payloadsallthethings metasploit-framework exploitdb peass
-    libimage-exiftool-perl steghide binwalk3 7zip xxd
-    wordlists seclists cupp cewl crunch
-    podman podman-compose docker-compose
+    # scanning / footprinting / services
+    nmap masscan rustscan naabu autorecon nbtscan ike-scan
+    dnsrecon dnsenum fierce sublist3r amass subfinder assetfinder findomain dnsx httpx-toolkit
+    whatweb wafw00f nikto eyewitness gowitness nuclei theharvester recon-ng finalrecon
+    smtp-user-enum ismtp swaks snmp onesixtyone braa snmpcheck ssh-audit sslscan testssl.sh
+    ftp lftp tftp-hpa telnet finger rusers rwho rsh-client nfs-common cifs-utils
+    smbclient samba-common-bin smbmap enum4linux enum4linux-ng polenum ridenum
+    ldap-utils ldeep python3-ldapdomaindump krb5-user kerberoast ipmitool
+    redis-tools default-mysql-client postgresql-client sqlite3 sqsh freetds-bin
+    odat oscanner tnscmd10g rdesktop freerdp3-x11 freerdp-x11
+    # web
+    burpsuite zaproxy ffuf gobuster feroxbuster dirsearch dirb wfuzz sqlmap commix
+    xsstrike sstimap wpscan joomscan cmseek arjun katana hakrawler gospider getallurls
+    waybackpy phpggc webshells laudanum weevely cewl davtest cadaver
+    # passwords
+    hashcat hashcat-utils john hashid hash-identifier name-that-hash hydra medusa patator
+    crowbar ncrack legba brutespray cupp crunch rsmangler maskprocessor princeprocessor
+    wordlists seclists payloadsallthethings bopscrk linkedin2username gpp-decrypt
+    lapsdumper dploot hekatomb trufflehog gitleaks creddump7 samdump2 pdfcrack fcrackzip
+    # active directory / windows
+    impacket-scripts python3-impacket netexec crackmapexec evil-winrm evil-winrm-py
+    certipy-ad certi coercer bloodhound bloodhound-ce-python bloodhound.py bloodyad
+    krbrelayx mitm6 responder snaffler-ng sprayhound mssqlpwner
+    sharphound rubeus mimikatz powersploit nishang powercat windows-binaries
+    windows-privesc-check ncat-w32
+    # python modules used by the git-based tools in ~/tools
+    python3-ldap3 python3-ldap python3-pyasn1 python3-rich python3-pycryptodome
+    python3-dnspython python3-six
+    # shells / pivoting / file transfer
+    netcat-traditional ncat socat rlwrap penelope hoaxshell sshpass proxychains4 sshuttle
+    chisel chisel-common-binaries ligolo-ng ligolo-ng-common-binaries
+    dnscat2 iodine ptunnel goshs wsgidav python3-pyftpdlib
+    # privesc / exploits / misc
+    peass pspy linux-exploit-suggester unix-privesc-check
+    metasploit-framework exploitdb libimage-exiftool-perl steghide binwalk
+    wireshark tshark powershell
 )
 
-readonly -a OPTIONAL_SECURITY_PACKAGES=(
-    kerbrute dnsenum fierce ftp telnet ipmitool eyewitness wafw00f nuclei subfinder amass httpx-toolkit bopscrk
-    ldeep adidnsdump mitm6 azurehound sharphound rubeus powershell powersploit pkinittools pywhisker
-    kali-tools-windows-resources windows-binaries chisel-common-binaries ligolo-ng-common-binaries
-)
+# ============================================================== output helpers
+C_RESET=$'\033[0m'; C_BOLD=$'\033[1m'; C_DIM=$'\033[2m'
+C_RED=$'\033[31m'; C_GREEN=$'\033[32m'; C_YELLOW=$'\033[33m'; C_WHITE=$'\033[97m'
 
-mkdir -p "$STATE_DIR" "$BACKUP_ROOT" "$LOCAL_BIN" "$MANAGED_BIN" "$TOOLS_DIR"
 export PATH="$LOCAL_BIN:$MANAGED_BIN:$PATH"
-touch "$LOG_FILE"
+mkdir -p -- "$STATE_DIR" "$BACKUP_ROOT"
+: > "$ISSUES_FILE"
 exec > >(tee -a "$LOG_FILE") 2>&1
 
-C_RESET='\033[0m'
-C_BOLD='\033[1m'
-C_RED='\033[31m'
-C_GREEN='\033[32m'
-C_YELLOW='\033[33m'
-C_BLUE='\033[34m'
-
-info() { printf '%b[+]%b %s\n' "$C_BLUE" "$C_RESET" "$*"; }
-ok()   { printf '%b[✓]%b %s\n' "$C_GREEN" "$C_RESET" "$*"; }
-warn() { printf '%b[!]%b %s\n' "$C_YELLOW" "$C_RESET" "$*" >&2; }
-die()  { printf '%b[x]%b %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
+section() { printf '\n%s%s== %s%s\n' "$C_BOLD" "$C_WHITE" "$*" "$C_RESET"; }
+info()    { printf '%s[+]%s %s\n' "$C_WHITE" "$C_RESET" "$*"; }
+ok()      { printf '%s[✓]%s %s\n' "$C_GREEN" "$C_RESET" "$*"; }
+warn()    { printf '%s[!]%s %s\n' "$C_YELLOW" "$C_RESET" "$*"; printf '%s\n' "$*" >> "$ISSUES_FILE"; }
+die()     { printf '%s[x]%s %s\n' "$C_RED" "$C_RESET" "$*" >&2; exit 1; }
 
 on_error() {
-    local exit_code=$?
-    local line_no=${1:-unknown}
-    printf '%b[x]%b Installation failed at line %s (exit %s).\n' "$C_RED" "$C_RESET" "$line_no" "$exit_code" >&2
-    printf '    Log: %s\n' "$LOG_FILE" >&2
-    exit "$exit_code"
+    local code=$? line=${1:-?}
+    printf '%s[x]%s Stopped at install.sh line %s (exit %s). Nothing was removed.\n    Log: %s\n' \
+        "$C_RED" "$C_RESET" "$line" "$code" "$LOG_FILE" >&2
+    exit "$code"
 }
 trap 'on_error "$LINENO"' ERR
 
-choose_wallpaper() {
-    local input
-    if [[ ! -t 0 ]]; then
-        WALLPAPER_CHOICE='default.png'
-        return 0
+cleanup() {
+    [[ -n "$SUDO_KEEPALIVE_PID" ]] && kill "$SUDO_KEEPALIVE_PID" 2>/dev/null || true
+}
+trap cleanup EXIT
+
+# Run a best-effort step in a subshell: inside it any error stops that step
+# (set -e), but the failure is only reported and the install goes on.
+optional() {
+    local desc=$1 rc
+    shift
+    trap - ERR
+    set +e
+    ( set -e; "$@" )
+    rc=$?
+    set -e
+    trap 'on_error "$LINENO"' ERR
+    if (( rc != 0 )); then
+        warn "$desc did not finish cleanly (exit $rc); see $LOG_FILE"
     fi
-
-    cat <<'MENU'
-
-Wallpaper
----------
-  1  Contour (default)
-  2  Relief — black 3D topography
-  3  Spectre — monochrome figure
-  4  Amber — warm abstract
-MENU
-    read -r -p 'Wallpaper [1]: ' input || input=''
-    case "${input:-1}" in
-        1) WALLPAPER_CHOICE='default.png' ;;
-        2) WALLPAPER_CHOICE='relief.png' ;;
-        3) WALLPAPER_CHOICE='spectre.png' ;;
-        4) WALLPAPER_CHOICE='amber.png' ;;
-        *) warn "Unknown choice '$input'; using contour."; WALLPAPER_CHOICE='default.png' ;;
-    esac
+    return 0
 }
 
+have() { command -v -- "$1" >/dev/null 2>&1; }
+
+# Join arguments with single spaces (IFS is newline/tab in this script).
+words() { local IFS=' '; printf '%s' "$*"; }
+
+# ============================================================== preflight
 require_normal_user() {
-    [[ ${EUID:-$(id -u)} -ne 0 ]] || die 'Do not run this installer as root. Run ./install.sh as your normal Kali user.'
-    command -v sudo >/dev/null 2>&1 || die 'sudo is required.'
+    [[ ${EUID:-$(id -u)} -ne 0 ]] || die 'Run ./install.sh as your normal Kali user, not root (it asks for sudo itself).'
+    have sudo || die 'sudo is required.'
 }
-
 
 require_kali() {
     [[ -r /etc/os-release ]] || die 'Cannot identify the operating system.'
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    [[ ${ID:-} == kali ]] || die "This installer is intentionally limited to Kali Linux (detected: ${PRETTY_NAME:-unknown})."
+    local id='' pretty=''
+    id="$(. /etc/os-release && printf '%s' "${ID:-}")"
+    pretty="$(. /etc/os-release && printf '%s' "${PRETTY_NAME:-unknown}")"
+    [[ "$id" == kali ]] || die "This installer only supports Kali Linux (found: $pretty)."
 }
 
+choose_wallpaper() {
+    local input=''
+    [[ -t 0 ]] || return 0
+    cat <<'MENU'
 
-prime_sudo() {
-    info 'Requesting sudo access...'
+Wallpaper (change any time with Mod+Shift+B)
+  1  Contour   dark topographic lines (default)
+  2  Black     solid near-black
+  3  Dots      faint dot grid
+  4  Grid      fine line grid
+  5  Grain     subtle film grain
+MENU
+    read -r -p 'Wallpaper [1]: ' input || input=''
+    case "${input:-1}" in
+        1) WALLPAPER_CHOICE='contour.png' ;;
+        2) WALLPAPER_CHOICE='black.png' ;;
+        3) WALLPAPER_CHOICE='dots.png' ;;
+        4) WALLPAPER_CHOICE='grid.png' ;;
+        5) WALLPAPER_CHOICE='grain.png' ;;
+        *) info "Unknown choice '$input'; using Contour." ;;
+    esac
+}
+
+start_sudo() {
+    info 'Asking for sudo once (kept alive while the installer runs)...'
     sudo -v
+    ( while kill -0 "$$" 2>/dev/null; do sudo -n -v 2>/dev/null || exit 0; sleep 50; done ) &
+    SUDO_KEEPALIVE_PID=$!
 }
 
-
-apt_refresh() {
-    info 'Refreshing Kali package metadata...'
-    if command -v kali-check-apt-sources >/dev/null 2>&1; then
-        kali-check-apt-sources >/dev/null 2>&1 || warn 'Kali reports a possible APT source issue. The installer will not rewrite your sources.'
+is_vmware() {
+    if have systemd-detect-virt && [[ "$(systemd-detect-virt 2>/dev/null || true)" == vmware ]]; then
+        return 0
     fi
-    sudo apt-get update
+    grep -qi vmware /sys/class/dmi/id/sys_vendor /sys/class/dmi/id/product_name 2>/dev/null
 }
 
+# ============================================================== apt
+APT_REASON=''
 
-apt_has_package() {
-    # `apt-cache show` can return metadata for packages that no longer have an
-    # installable candidate in kali-rolling. Check the policy candidate instead.
+apt_available() {
     local candidate
-    candidate="$(LC_ALL=C apt-cache policy "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    candidate="$(LC_ALL=C apt-cache policy -- "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
     [[ -n "$candidate" && "$candidate" != "(none)" ]]
 }
 
-
-apt_install_required() {
-    local pkg
-    local -a packages=("$@") missing=()
-
-    for pkg in "${packages[@]}"; do
-        apt_has_package "$pkg" || missing+=("$pkg")
-    done
-    ((${#missing[@]} == 0)) || die "Required Kali package(s) are unavailable in your configured repositories: ${missing[*]}"
-
-    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -- "${packages[@]}"
+pkg_installed() {
+    dpkg-query -W -f='${Status}' -- "$1" 2>/dev/null | grep -q 'install ok installed'
 }
 
+# Succeeds only if APT can install the packages without removing anything.
+apt_simulate() {
+    local out
+    APT_REASON=''
+    if ! out="$(LC_ALL=C apt-get -s -q install --no-upgrade -- "$@" 2>&1)"; then
+        APT_REASON="$(grep -E '^(E:| )' <<< "$out" | head -n 3 | tr -s ' \n' ' ')"
+        APT_REASON="${APT_REASON:-dependency problem}"
+        return 1
+    fi
+    if grep -q '^Remv ' <<< "$out"; then
+        APT_REASON="would remove: $(awk '/^Remv / {print $2}' <<< "$out" | tr '\n' ' ')"
+        return 1
+    fi
+    return 0
+}
 
-apt_install_available() {
-    local pkg
-    local -a wanted=("$@") available=() unavailable=()
+apt_do_install() {
+    sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -q --no-upgrade --no-remove \
+        -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -- "$@"
+}
 
-    for pkg in "${wanted[@]}"; do
-        if apt_has_package "$pkg"; then
-            available+=("$pkg")
+# apt_install_set LABEL required|optional PKG...
+apt_install_set() {
+    local label=$1 mode=$2 pkg
+    shift 2
+    local -a todo=() missing=() good=()
+
+    for pkg in "$@"; do
+        if pkg_installed "$pkg"; then
+            continue
+        elif apt_available "$pkg"; then
+            todo+=("$pkg")
         else
-            unavailable+=("$pkg")
+            missing+=("$pkg")
         fi
     done
 
-    ((${#available[@]} == 0)) || sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y -- "${available[@]}"
-    ((${#unavailable[@]} == 0)) || warn "Optional packages not present in this Kali repository were skipped: ${unavailable[*]}"
-}
-
-
-apt_preflight_resolution() {
-    local tmp
-    tmp="$(mktemp)"
-
-    info 'Simulating the complete required APT transaction before installing packages...'
-    if ! env DEBIAN_FRONTEND=noninteractive apt-get --simulate install -y -- \
-        "${SYSTEM_PACKAGES[@]}" "${SECURITY_PACKAGES[@]}" >"$tmp" 2>&1; then
-        cat "$tmp" >&2
-        rm -f -- "$tmp"
-        die 'APT cannot resolve the required package set. No package installation was started by this run.'
-    fi
-
-    rm -f -- "$tmp"
-    ok 'APT dependency simulation passed.'
-}
-
-
-install_geist_mono() {
-    local font_dir="$HOME/.local/share/fonts/Geist"
-    local tmp_dir zip_path staged count
-
-    info 'Installing Geist Mono (Pebl3-style typography)...'
-    tmp_dir="$(mktemp -d)"
-    zip_path="$tmp_dir/geist-font.zip"
-    staged="$tmp_dir/staged"
-    mkdir -p "$staged" "$tmp_dir/unpacked"
-
-    if curl --fail --location --retry 3 --output "$zip_path" \
-        'https://github.com/vercel/geist-font/releases/latest/download/geist-font.zip'; then
-        if unzip -q "$zip_path" -d "$tmp_dir/unpacked"; then
-            count=0
-            while IFS= read -r -d '' font; do
-                install -m 0644 "$font" "$staged/$(basename "$font")"
-                count=$((count + 1))
-            done < <(find "$tmp_dir/unpacked" -type f \( -iname 'GeistMono*.ttf' -o -iname 'GeistMono*.otf' \) -print0)
-
-            if (( count > 0 )); then
-                # Only replace our dedicated Geist directory after a valid archive
-                # was unpacked. A failed download never destroys an existing font.
-                rm -rf -- "$font_dir"
-                mkdir -p "$font_dir"
-                cp -a -- "$staged/." "$font_dir/"
-                fc-cache -f "$font_dir" >/dev/null
-                ok 'Geist Mono installed.'
-            else
-                warn 'The Geist release contained no recognized Geist Mono desktop fonts; JetBrains Mono will be used.'
-            fi
-        else
-            warn 'The downloaded Geist archive could not be unpacked; keeping any existing fonts untouched.'
+    if ((${#missing[@]})); then
+        if [[ "$mode" == required ]]; then
+            die "$label: not available in your Kali repositories: $(words "${missing[@]}") (nothing was changed)"
         fi
-    else
-        warn 'Could not download Geist Mono; JetBrains Mono will be used.'
+        warn "$label: not in your Kali repositories, skipped: $(words "${missing[@]}")"
+    fi
+    if ((${#todo[@]} == 0)); then
+        ok "$label: already installed"
+        return 0
     fi
 
-    rm -rf -- "$tmp_dir"
+    info "$label: installing ${#todo[@]} package(s)..."
+    if apt_simulate "${todo[@]}" && apt_do_install "${todo[@]}"; then
+        ok "$label: done"
+        return 0
+    fi
+    [[ "$mode" == required ]] && die "$label: APT cannot install these safely: ${APT_REASON:-install failed} (nothing was removed)"
+
+    warn "$label: batch install not possible (${APT_REASON:-install failed}); retrying package by package"
+    for pkg in "${todo[@]}"; do
+        pkg_installed "$pkg" && continue
+        if apt_simulate "$pkg"; then
+            good+=("$pkg")
+        else
+            warn "$label: skipped $pkg ($APT_REASON)"
+        fi
+    done
+    ((${#good[@]})) || return 0
+    if apt_simulate "${good[@]}" && apt_do_install "${good[@]}"; then
+        ok "$label: done (with skips)"
+        return 0
+    fi
+    for pkg in "${good[@]}"; do
+        pkg_installed "$pkg" && continue
+        if apt_simulate "$pkg" && apt_do_install "$pkg"; then
+            :
+        else
+            warn "$label: could not install $pkg"
+        fi
+    done
+    return 0
 }
 
+apt_health() {
+    local audit
+    audit="$(sudo dpkg --audit 2>&1 || true)"
+    [[ -z "$audit" ]] || die "dpkg reports unfinished package operations. Fix them first (sudo dpkg --configure -a):
+$audit"
+    sudo apt-get check -q >/dev/null || die 'APT reports broken dependencies. Fix them first (sudo apt --fix-broken install).'
+}
 
+install_packages() {
+    section 'Packages'
+    info 'Refreshing package lists...'
+    sudo apt-get update -q || die 'apt-get update failed. Check your network and /etc/apt/sources.list.'
+    apt_health
+    ok 'APT/dpkg are healthy'
+
+    apt_install_set 'Desktop core' required "${CORE_PACKAGES[@]}"
+    apt_install_set 'Desktop extras' optional "${DESKTOP_PACKAGES[@]}"
+    if is_vmware; then
+        apt_install_set 'VMware integration' optional open-vm-tools-desktop
+    fi
+    apt_install_set 'Kali default toolset' optional "${KALI_META_PACKAGES[@]}"
+    apt_install_set 'HTB/CPTS toolset' optional "${SECURITY_PACKAGES[@]}"
+    apt_health
+}
+
+# ============================================================== dotfiles
 backup_path() {
-    local source_path=$1 backup_dir=$2 rel
-    [[ -e "$source_path" || -L "$source_path" ]] || return 0
-
-    rel="${source_path#$HOME/}"
-    mkdir -p "$backup_dir/$(dirname "$rel")"
-    cp -a -- "$source_path" "$backup_dir/$rel"
+    local src=$1 rel
+    [[ -e "$src" || -L "$src" ]] || return 0
+    rel="${src#"$HOME"/}"
+    mkdir -p -- "$BACKUP_DIR/$(dirname -- "$rel")"
+    cp -a -- "$src" "$BACKUP_DIR/$rel"
 }
 
+# i3 -C does not always set an exit code, so also look for ERROR lines.
+i3_config_ok() {
+    local out
+    out="$(i3 -C -c "$1" 2>&1)" || { printf '%s\n' "$out" >&2; return 1; }
+    if grep -q 'ERROR' <<< "$out"; then
+        printf '%s\n' "$out" >&2
+        return 1
+    fi
+    return 0
+}
 
-install_repo_dotfiles() {
-    local stamp backup_dir name source target
-    local -a config_dirs=(i3 alacritty rofi picom dunst gtk-3.0 firefox)
+validate_shipped_configs() {
+    local f sock="kc-check-$$" out
+    info 'Validating the new configuration before installing it...'
+    for f in "$SCRIPT_DIR"/.config/i3/scripts/*.sh "$SCRIPT_DIR/.fehbg"; do
+        bash -n "$f" || die "Syntax error in $f"
+    done
+    zsh -n "$SCRIPT_DIR/.zshrc" || die 'zsh rejected .zshrc'
+    zsh -n "$SCRIPT_DIR/.config/kali-clean/env-sync.zsh" || die 'zsh rejected env-sync.zsh'
+    for f in "$SCRIPT_DIR/.config/i3/status.py" "$SCRIPT_DIR/.config/kali-clean/kcinfo.py" "$SCRIPT_DIR/.config/kali-clean/env-sync.py"; do
+        python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || die "Python rejected $f"
+    done
+    python3 -c 'import sys,tomllib; tomllib.load(open(sys.argv[1],"rb"))' "$SCRIPT_DIR/.config/alacritty/alacritty.toml" \
+        || die 'alacritty.toml is not valid TOML'
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$SCRIPT_DIR/.config/firefox/foxyproxy-managed.json" \
+        || die 'foxyproxy-managed.json is not valid JSON'
+    i3_config_ok "$SCRIPT_DIR/.config/i3/config" || die 'i3 rejected the shipped i3 config'
+    out="$(tmux -L "$sock" -f /dev/null new-session -d -s check 'sleep 10' \; source-file "$SCRIPT_DIR/.tmux.conf" 2>&1)" || {
+        tmux -L "$sock" kill-server >/dev/null 2>&1 || true
+        die "tmux rejected .tmux.conf: $out"
+    }
+    tmux -L "$sock" kill-server >/dev/null 2>&1 || true
+    ok 'Configuration is valid'
+}
 
-    stamp="$(date '+%Y%m%d-%H%M%S-%N')"
-    backup_dir="$BACKUP_ROOT/$stamp"
-    mkdir -p "$backup_dir" "$HOME/.config"
+install_dotfiles() {
+    section 'Desktop configuration'
+    local name src dst
+    BACKUP_DIR="$BACKUP_ROOT/$(date '+%Y%m%d-%H%M%S')"
+    mkdir -p -- "$BACKUP_DIR" "$HOME/.config"
+    validate_shipped_configs
 
-    info "Installing user dotfiles (backup: $backup_dir)..."
-
-    for name in "${config_dirs[@]}"; do
-        source="$SCRIPT_DIR/.config/$name"
-        target="$HOME/.config/$name"
-        [[ -e "$source" ]] || continue
-        backup_path "$target" "$backup_dir"
-        rm -rf -- "$target"
-        cp -a -- "$source" "$target"
+    # Whole directories owned by this project.
+    for name in i3 alacritty rofi dunst; do
+        src="$SCRIPT_DIR/.config/$name"
+        dst="$HOME/.config/$name"
+        [[ -d "$src" ]] || continue
+        backup_path "$dst"
+        rm -rf -- "$dst"
+        cp -a -- "$src" "$dst"
     done
 
-    # Runtime state (session.env and selected theme) lives beside shipped theme
-    # files. Refresh only project-owned paths so reruns never erase user state.
-    if [[ -d "$SCRIPT_DIR/.config/kali-clean" ]]; then
-        mkdir -p "$HOME/.config/kali-clean"
-
-        for name in env-sync.zsh env-sync.py apply-theme.sh theme-menu.sh; do
-            source="$SCRIPT_DIR/.config/kali-clean/$name"
-            target="$HOME/.config/kali-clean/$name"
-            [[ -f "$source" ]] || continue
-            backup_path "$target" "$backup_dir"
-            if [[ "$name" == *.py || "$name" == *.sh ]]; then
-                install -m 0755 "$source" "$target"
-            else
-                install -m 0644 "$source" "$target"
-            fi
-        done
-
-        source="$SCRIPT_DIR/.config/kali-clean/themes"
-        target="$HOME/.config/kali-clean/themes"
-        if [[ -d "$source" ]]; then
-            backup_path "$target" "$backup_dir"
-            rm -rf -- "$target"
-            cp -a -- "$source" "$target"
-        fi
-    fi
+    # kali-clean helpers; session.env (your persisted variables) is kept.
+    mkdir -p -- "$HOME/.config/kali-clean"
+    for name in env-sync.py env-sync.zsh kcinfo.py; do
+        backup_path "$HOME/.config/kali-clean/$name"
+        install -m 0644 -- "$SCRIPT_DIR/.config/kali-clean/$name" "$HOME/.config/kali-clean/$name"
+    done
+    chmod 0755 "$HOME/.config/kali-clean/env-sync.py" "$HOME/.config/kali-clean/kcinfo.py"
+    # Leftovers of the old theme switcher.
+    for name in themes current theme apply-theme.sh theme-menu.sh; do
+        dst="$HOME/.config/kali-clean/$name"
+        [[ -e "$dst" || -L "$dst" ]] || continue
+        backup_path "$dst"
+        rm -rf -- "$dst"
+    done
 
     for name in .zshrc .tmux.conf .fehbg; do
-        source="$SCRIPT_DIR/$name"
-        target="$HOME/$name"
-        [[ -e "$source" ]] || continue
-        backup_path "$target" "$backup_dir"
-        cp -a -- "$source" "$target"
+        backup_path "$HOME/$name"
+        cp -f -- "$SCRIPT_DIR/$name" "$HOME/$name"
     done
 
-    if [[ -d "$SCRIPT_DIR/.wallpaper" ]]; then
-        # Preserve any wallpapers the user added. Only the files shipped by this
-        # project (and the current selector symlink) are managed by the installer.
-        mkdir -p "$HOME/.wallpaper"
-        backup_path "$HOME/.wallpaper/current" "$backup_dir"
-        for name in default.png relief.png spectre.png amber.png; do
-            source="$SCRIPT_DIR/.wallpaper/$name"
-            target="$HOME/.wallpaper/$name"
-            [[ -f "$source" ]] || continue
-            backup_path "$target" "$backup_dir"
-            install -m 0644 "$source" "$target"
-        done
-    fi
+    # GTK: settings.ini + gtk.css only (bookmarks and anything else in gtk-3.0 stay).
+    mkdir -p -- "$HOME/.config/gtk-3.0"
+    for name in settings.ini gtk.css; do
+        backup_path "$HOME/.config/gtk-3.0/$name"
+        install -m 0644 -- "$SCRIPT_DIR/.config/gtk-3.0/$name" "$HOME/.config/gtk-3.0/$name"
+    done
 
-    # Git hosting/web uploads and some archive formats do not reliably preserve
-    # executable bits. Enforce the runtime permissions we require instead of
-    # trusting repository metadata.
-    [[ ! -f "$HOME/.fehbg" ]] || chmod 0755 "$HOME/.fehbg"
-    if [[ -d "$HOME/.config/i3/scripts" ]]; then
-        find "$HOME/.config/i3/scripts" -maxdepth 1 -type f -name '*.sh' -exec chmod 0755 {} +
-    fi
-    if [[ -d "$HOME/.config/i3/blocks" ]]; then
-        find "$HOME/.config/i3/blocks" -maxdepth 1 -type f -exec chmod 0755 {} +
-    fi
+    # Flameshot: screenshots go to ~/Pictures/Screenshots with a timestamp name.
+    mkdir -p -- "$HOME/.config/flameshot" "$HOME/Pictures/Screenshots"
+    backup_path "$HOME/.config/flameshot/flameshot.ini"
+    sed "s|@HOME@|$HOME|g" "$SCRIPT_DIR/.config/flameshot/flameshot.ini" > "$HOME/.config/flameshot/flameshot.ini"
 
-    ok 'User dotfiles copied. No system configuration files were overwritten.'
+    # Wallpapers: only the shipped files are managed; your own images stay.
+    mkdir -p -- "$HOME/.wallpaper"
+    for name in contour.png black.png dots.png grid.png grain.png; do
+        install -m 0644 -- "$SCRIPT_DIR/.wallpaper/$name" "$HOME/.wallpaper/$name"
+    done
+
+    chmod 0755 "$HOME/.fehbg" "$HOME"/.config/i3/scripts/*.sh "$HOME/.config/i3/status.py"
+    ok "Dotfiles installed (previous versions backed up to $BACKUP_DIR)"
 }
 
-
-apply_font_fallback() {
-    local chosen='Geist Mono' file matched
-    local -a files=(
-        "$HOME/.config/i3/config"
-        "$HOME/.config/alacritty/alacritty.toml"
-        "$HOME/.config/rofi/config.rasi"
-        "$HOME/.config/dunst/dunstrc"
-        "$HOME/.config/gtk-3.0/settings.ini"
-        "$HOME/.config/kali-clean/themes/obsidian/i3-theme.conf"
-        "$HOME/.config/kali-clean/themes/neon/i3-theme.conf"
-        "$HOME/.config/kali-clean/themes/obsidian/rofi.rasi"
-        "$HOME/.config/kali-clean/themes/neon/rofi.rasi"
-        "$HOME/.config/kali-clean/themes/obsidian/dunstrc"
-        "$HOME/.config/kali-clean/themes/neon/dunstrc"
-    )
-
-    matched="$(fc-match -f '%{family}' 'Geist Mono' 2>/dev/null || true)"
-    if [[ "$matched" != *Geist* ]]; then
-        chosen='JetBrains Mono'
-        warn 'Geist Mono is unavailable; applying the installed JetBrains Mono fallback.'
-        for file in "${files[@]}"; do
-            [[ -f "$file" ]] || continue
-            sed -i 's/Geist Mono/JetBrains Mono/g' "$file"
-        done
+apply_wallpaper() {
+    [[ -f "$HOME/.wallpaper/$WALLPAPER_CHOICE" ]] || WALLPAPER_CHOICE='contour.png'
+    ln -sfn -- "$WALLPAPER_CHOICE" "$HOME/.wallpaper/current"
+    if [[ -n "${DISPLAY:-}" ]]; then
+        bash "$HOME/.config/i3/scripts/set-wallpaper.sh" >/dev/null 2>&1 || true
     fi
-    ok "Desktop font: $chosen"
+    ok "Wallpaper: $WALLPAPER_CHOICE"
 }
 
+install_tmux_plugins() {
+    local repo name dest
+    mkdir -p -- "$HOME/.tmux/plugins" "$HOME/logs/tmux"
+    for repo in tmux-plugins/tmux-logging tmux-plugins/tmux-resurrect; do
+        name="${repo#*/}"
+        dest="$HOME/.tmux/plugins/$name"
+        git_get "$dest" "https://github.com/$repo.git" || warn "tmux plugin $name could not be downloaded"
+    done
+    ok 'tmux plugins: logging + resurrect'
+}
 
 configure_login_shell() {
     local zsh_path
     zsh_path="$(command -v zsh)"
-    [[ -n "$zsh_path" ]] || die 'zsh was installed but cannot be located.'
-    grep -Fxq "$zsh_path" /etc/shells || die "Installed zsh is not listed in /etc/shells: $zsh_path"
-
     if [[ "$(getent passwd "$USER" | cut -d: -f7)" != "$zsh_path" ]]; then
+        grep -Fxq "$zsh_path" /etc/shells || { warn "$zsh_path is not in /etc/shells; login shell unchanged"; return 0; }
         info "Setting zsh as the login shell for $USER..."
         sudo chsh -s "$zsh_path" "$USER"
     fi
+    ok 'Login shell: zsh'
 }
 
-
-configure_default_browser() {
-    local desktop_file=''
-
-    if [[ -f /usr/share/applications/firefox-esr.desktop ]]; then
-        desktop_file='firefox-esr.desktop'
-    elif [[ -f /usr/share/applications/firefox.desktop ]]; then
-        desktop_file='firefox.desktop'
-    fi
-
-    if [[ -n "$desktop_file" ]]; then
-        xdg-settings set default-web-browser "$desktop_file" >/dev/null 2>&1 || \
-            warn 'Could not set Firefox as the default browser in the current session.'
-    fi
+# ============================================================== firefox
+firefox_bin() {
+    local b
+    for b in firefox-esr firefox; do
+        have "$b" && { printf '%s' "$b"; return 0; }
+    done
+    return 1
 }
 
-
-install_firefox_customizations() {
-    local source_dir="$SCRIPT_DIR/.config/firefox"
-    local ini="$HOME/.mozilla/firefox/profiles.ini"
-    local line profile_path absolute user_chrome user_content user_js
-
-    [[ -d "$source_dir" ]] || return 0
-    [[ -f "$ini" ]] || {
-        warn 'Firefox has no profile yet. Launch Firefox once and rerun ./install.sh to apply browser chrome.'
-        return 0
-    }
-
-    user_chrome="$source_dir/userChrome.css"
-    user_content="$source_dir/userContent.css"
-    user_js="$source_dir/user.js"
-
+firefox_profiles() {
+    local ini="$HOME/.mozilla/firefox/profiles.ini" line path
+    [[ -f "$ini" ]] || return 0
     while IFS= read -r line; do
         [[ $line == Path=* ]] || continue
-        profile_path="${line#Path=}"
-        [[ -n "$profile_path" ]] || continue
-
-        if [[ "$profile_path" = /* ]]; then
-            absolute="$profile_path"
-        else
-            absolute="$HOME/.mozilla/firefox/$profile_path"
-        fi
-
-        [[ -d "$absolute" ]] || continue
-        mkdir -p "$absolute/chrome"
-        [[ -f "$user_chrome" ]] && cp -f -- "$user_chrome" "$absolute/chrome/userChrome.css"
-        [[ -f "$user_content" ]] && cp -f -- "$user_content" "$absolute/chrome/userContent.css"
-        [[ -f "$user_js" ]] && cp -f -- "$user_js" "$absolute/user.js"
+        path="${line#Path=}"
+        [[ "$path" = /* ]] || path="$HOME/.mozilla/firefox/$path"
+        [[ -d "$path" ]] && printf '%s\n' "$path"
     done < "$ini"
 }
 
-
-setup_lab_directories() {
-    info 'Creating all user-owned lab/workspace directories under home...'
-    mkdir -p \
-        "$TOOLS_DIR" "$LAB_ROOT" \
-        "$HOME/wordlists" "$HOME/vpn" \
-        "$HOME/htb/vpn" "$HOME/htb/machines" "$HOME/htb/challenges" "$HOME/htb/academy" "$HOME/htb/notes" "$HOME/htb/loot" "$HOME/htb/tools" \
-        "$HOME/hacksmarter/vpn" "$HOME/hacksmarter/labs" "$HOME/hacksmarter/notes" "$HOME/hacksmarter/loot" "$HOME/hacksmarter/tools"
+ensure_firefox_profile() {
+    local bin tmp
+    [[ -f "$HOME/.mozilla/firefox/profiles.ini" ]] && return 0
+    bin="$(firefox_bin)" || return 1
+    pgrep -u "$USER" -x "$bin" >/dev/null 2>&1 && return 0
+    info 'Creating a Firefox profile (one headless start)...'
+    tmp="$(mktemp -d)"
+    timeout 90 "$bin" --headless --screenshot "$tmp/blank.png" about:blank >/dev/null 2>&1 || true
+    rm -rf -- "$tmp"
+    [[ -f "$HOME/.mozilla/firefox/profiles.ini" ]]
 }
 
-
-safe_home_symlink() {
-    local target=$1 link=$2 current=''
-    if [[ -L "$link" ]]; then
-        current="$(readlink -- "$link" 2>/dev/null || true)"
-        if [[ "$current" == "$target" ]]; then
-            ln -sfn -- "$target" "$link"
-        else
-            warn "Leaving existing user symlink untouched: $link -> $current"
-            return 0
-        fi
-    elif [[ -e "$link" ]]; then
-        warn "Leaving existing user path untouched instead of replacing it with a symlink: $link"
-        return 0
-    else
-        ln -s -- "$target" "$link"
+# Replace only the kali-clean block of an existing user.js.
+merge_user_js() {
+    local target=$1 tmp
+    tmp="$(mktemp)"
+    if [[ -f "$target" ]]; then
+        awk '/^\/\/ >>> kali-clean/ {skip=1} !skip {print} /^\/\/ <<< kali-clean/ {skip=0}' "$target" > "$tmp"
     fi
+    {
+        printf '// >>> kali-clean (managed block, re-written by install.sh)\n'
+        cat "$SCRIPT_DIR/.config/firefox/user.js"
+        printf '// <<< kali-clean\n'
+    } >> "$tmp"
+    install -m 0644 -- "$tmp" "$target"
+    rm -f -- "$tmp"
 }
 
-
-link_kali_resources_into_home() {
-    mkdir -p "$TOOLS_DIR" "$HOME/wordlists"
-    [[ -d /usr/share/seclists ]] && safe_home_symlink /usr/share/seclists "$HOME/wordlists/SecLists"
-    [[ -d /usr/share/payloadsallthethings ]] && safe_home_symlink /usr/share/payloadsallthethings "$HOME/wordlists/PayloadsAllTheThings"
-    [[ -d /usr/share/windows-resources ]] && safe_home_symlink /usr/share/windows-resources "$TOOLS_DIR/windows-resources"
-    [[ -d /usr/share/ligolo-ng-common-binaries ]] && safe_home_symlink /usr/share/ligolo-ng-common-binaries "$TOOLS_DIR/ligolo-ng-binaries"
-    [[ -d /usr/share/chisel-common-binaries ]] && safe_home_symlink /usr/share/chisel-common-binaries "$TOOLS_DIR/chisel-binaries"
-    [[ -d /usr/share/peass ]] && safe_home_symlink /usr/share/peass "$TOOLS_DIR/peass"
+xpi_id() {
+    unzip -p "$1" manifest.json 2>/dev/null | python3 -c '
+import json, re, sys
+raw = sys.stdin.read()
+try:
+    m = json.loads(raw)
+    s = m.get("browser_specific_settings") or m.get("applications") or {}
+    print(s.get("gecko", {}).get("id", ""))
+except ValueError:
+    hit = re.search(r"\"gecko\"\s*:\s*\{[^}]*\"id\"\s*:\s*\"([^\"]+)\"", raw)
+    print(hit.group(1) if hit else "")
+'
 }
 
+install_firefox() {
+    section 'Firefox'
+    local profile slug tmp id
+    local -a profiles=() xpis=()
+    if ! ensure_firefox_profile; then
+        warn 'Firefox has no profile yet; start Firefox once and re-run ./install.sh for the black theme and add-ons.'
+        return 0
+    fi
+    mapfile -t profiles < <(firefox_profiles)
+    ((${#profiles[@]})) || { warn 'No Firefox profile directory found.'; return 0; }
 
-install_wordlists() {
-    info 'Installing Kali wordlists and SecLists...'
-    apt_install_required wordlists seclists cupp cewl crunch
-    mkdir -p "$HOME/wordlists"
-
-    link_kali_resources_into_home
-
-    if [[ -f /usr/share/wordlists/rockyou.txt.gz ]]; then
-        safe_home_symlink /usr/share/wordlists/rockyou.txt.gz "$HOME/wordlists/rockyou.txt.gz"
-        if [[ ! -e "$HOME/wordlists/rockyou.txt" ]]; then
-            local rockyou_tmp="$HOME/wordlists/.rockyou.txt.tmp.$$"
-            info 'Creating an uncompressed per-user RockYou copy...'
-            rm -f -- "$rockyou_tmp"
-            if gzip -dc /usr/share/wordlists/rockyou.txt.gz > "$rockyou_tmp"; then
-                mv -f -- "$rockyou_tmp" "$HOME/wordlists/rockyou.txt"
+    # Add-ons from addons.mozilla.org (signed): FoxyProxy, Wappalyzer, Cookie-Editor.
+    tmp="$(mktemp -d)"
+    for slug in foxyproxy-standard wappalyzer cookie-editor; do
+        if curl -fsSL --retry 3 --connect-timeout 20 -o "$tmp/$slug.xpi" \
+            "https://addons.mozilla.org/firefox/downloads/latest/$slug/latest.xpi"; then
+            id="$(xpi_id "$tmp/$slug.xpi")"
+            if [[ -n "$id" ]]; then
+                mv -- "$tmp/$slug.xpi" "$tmp/$id.xpi"
+                xpis+=("$tmp/$id.xpi")
             else
-                rm -f -- "$rockyou_tmp"
-                die 'Failed to decompress RockYou.'
+                warn "Firefox add-on $slug: could not read its id"
             fi
+        else
+            warn "Firefox add-on $slug: download failed"
         fi
-    elif [[ -f /usr/share/wordlists/rockyou.txt ]]; then
-        safe_home_symlink /usr/share/wordlists/rockyou.txt "$HOME/wordlists/rockyou.txt"
-    fi
+    done
+
+    for profile in "${profiles[@]}"; do
+        mkdir -p -- "$profile/chrome" "$profile/extensions"
+        backup_path "$profile/chrome/userChrome.css"
+        backup_path "$profile/chrome/userContent.css"
+        cp -f -- "$SCRIPT_DIR/.config/firefox/userChrome.css" "$profile/chrome/userChrome.css"
+        cp -f -- "$SCRIPT_DIR/.config/firefox/userContent.css" "$profile/chrome/userContent.css"
+        rm -f -- "$profile/chrome/kali-clean-theme.css"
+        merge_user_js "$profile/user.js"
+        for id in "${xpis[@]}"; do
+            [[ -f "$profile/extensions/${id##*/}" ]] || cp -f -- "$id" "$profile/extensions/"
+        done
+    done
+    rm -rf -- "$tmp"
+
+    # FoxyProxy presets (Burp :8080, SOCKS5 :9050 and :1080) via managed storage.
+    mkdir -p -- "$HOME/.mozilla/managed-storage"
+    install -m 0644 -- "$SCRIPT_DIR/.config/firefox/foxyproxy-managed.json" \
+        "$HOME/.mozilla/managed-storage/foxyproxy@eric.h.jung.json"
+    ok "Firefox styled (${#profiles[@]} profile(s)); add-ons load at next start"
 }
 
-
-install_username_anarchy() {
-    local tool_dir="$TOOLS_DIR/username-anarchy"
-    info 'Installing username-anarchy under ~/tools with its Ruby runtime...'
-    apt_install_required ruby-full
-
-    if [[ -d "$tool_dir/.git" ]]; then
-        git -C "$tool_dir" pull --ff-only || warn 'username-anarchy update skipped because the checkout has diverged or the network is unavailable.'
-    elif [[ ! -e "$tool_dir" ]]; then
-        git clone --depth 1 https://github.com/urbanadventurer/username-anarchy.git "$tool_dir"
-    else
-        die "$tool_dir exists but is not a git checkout; refusing to overwrite your files."
-    fi
-
-    [[ -f "$tool_dir/username-anarchy" ]] || die 'username-anarchy checkout is missing the expected executable.'
-    chmod 0755 "$tool_dir/username-anarchy"
-    safe_home_symlink "$tool_dir/username-anarchy" "$LOCAL_BIN/username-anarchy" || true
-    [[ -x "$tool_dir/username-anarchy" ]] || die 'username-anarchy checkout is not executable.'
-    command -v username-anarchy >/dev/null 2>&1 || die 'username-anarchy is not available through ~/.local/bin.'
-}
-
-
-install_bloodhound_cli() {
-    local machine archive api_json asset_url digest tmp_dir binary actual
-    machine="$(uname -m)"
-
-    case "$machine" in
-        x86_64|amd64) archive='bloodhound-cli-linux-amd64.tar.gz' ;;
-        aarch64|arm64) archive='bloodhound-cli-linux-arm64.tar.gz' ;;
-        *) warn "BloodHound CLI upstream does not publish an automatic build for architecture: $machine"; return 0 ;;
-    esac
-
-    tmp_dir="$(mktemp -d)"
-    api_json="$tmp_dir/release.json"
-
-    info 'Installing the current official SpecterOps BloodHound CLI to ~/.local/bin...'
-    curl --fail --location --retry 3 \
-        --header 'Accept: application/vnd.github+json' \
-        --header 'X-GitHub-Api-Version: 2022-11-28' \
-        --output "$api_json" \
-        'https://api.github.com/repos/SpecterOps/bloodhound-cli/releases/latest'
-
-    asset_url="$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | .browser_download_url' "$api_json" | head -n1)"
-    digest="$(jq -r --arg name "$archive" '.assets[] | select(.name == $name) | (.digest // "")' "$api_json" | head -n1)"
-    [[ -n "$asset_url" && "$asset_url" != null ]] || { rm -rf -- "$tmp_dir"; die "Latest BloodHound CLI release has no $archive asset."; }
-
-    curl --fail --location --retry 3 --output "$tmp_dir/$archive" "$asset_url"
-
-    if [[ "$digest" == sha256:* ]]; then
-        actual="$(sha256sum "$tmp_dir/$archive" | awk '{print $1}')"
-        [[ "$actual" == "${digest#sha256:}" ]] || { rm -rf -- "$tmp_dir"; die 'BloodHound CLI SHA-256 verification failed.'; }
-    else
-        warn 'GitHub release metadata did not expose a SHA-256 digest; relying on HTTPS transport and executable verification.'
-    fi
-
-    tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
-    binary="$(find "$tmp_dir" -type f -name bloodhound-cli -print -quit)"
-    [[ -n "$binary" ]] || { rm -rf -- "$tmp_dir"; die 'BloodHound CLI archive did not contain the expected binary.'; }
-
-    mkdir -p "$MANAGED_BIN"
-    install -m 0755 "$binary" "$MANAGED_BIN/bloodhound-cli"
-    rm -rf -- "$tmp_dir"
-
-    "$MANAGED_BIN/bloodhound-cli" help >/dev/null || die 'BloodHound CLI installed but failed its help self-check.'
-    safe_home_symlink "$MANAGED_BIN/bloodhound-cli" "$LOCAL_BIN/bloodhound-cli" || true
-    ok "BloodHound CLI installed under home: $MANAGED_BIN/bloodhound-cli"
-}
-
-
-install_bloodhound_cli_runtime() {
-    info 'Installing rootless Podman support for BloodHound CLI...'
-    apt_install_required podman podman-compose docker-compose
-
-    # BloodHound CLI can use Podman only in Docker-compatibility mode. We avoid
-    # changing system Docker services or /etc. A user-level socket is safe and
-    # reversible; if the session has no user systemd instance, leave it manual.
-    if command -v systemctl >/dev/null 2>&1 && systemctl --user show-environment >/dev/null 2>&1; then
-        systemctl --user enable --now podman.socket || warn 'Could not enable the user Podman socket; run `systemctl --user enable --now podman.socket` after login.'
-    else
-        warn 'No active user systemd instance; enable podman.socket after logging into i3 if BloodHound CLI requests it.'
-    fi
-}
-
-
-install_user_command_link() {
-    local name=$1 target=$2 dest existing_target system_existing target_real
-    dest="$LOCAL_BIN/$name"
-
-    [[ "$name" != */* && -n "$name" ]] || { warn "Refusing invalid command name: $name"; return 1; }
-    [[ -x "$target" ]] || { warn "Cannot expose '$name'; target is not executable: $target"; return 1; }
-
-    mkdir -p "$LOCAL_BIN"
-    target_real="$(readlink -f -- "$target" 2>/dev/null || printf '%s' "$target")"
-
-    if [[ -L "$dest" ]]; then
-        existing_target="$(readlink -f -- "$dest" 2>/dev/null || true)"
-        if [[ "$existing_target" == "$target_real" ]]; then
-            return 0
-        fi
-
-        # Only replace links clearly managed by this project. Never replace a
-        # user's unrelated ~/.local/bin symlink.
-        case "$(readlink -- "$dest" 2>/dev/null || true)" in
-            /usr/bin/impacket-*|"$MANAGED_BIN"/*|"$TOOLS_DIR"/*)
-                ln -sfn -- "$target" "$dest"
-                return 0
-                ;;
-            *)
-                warn "Leaving existing user command untouched: $dest"
-                return 0
-                ;;
-        esac
-    elif [[ -e "$dest" ]]; then
-        warn "Leaving existing user command untouched: $dest"
+# ============================================================== tool helpers
+git_get() {
+    local dest=$1 url=$2
+    if [[ -d "$dest/.git" ]]; then
+        GIT_TERMINAL_PROMPT=0 timeout 300 git -C "$dest" pull -q --ff-only >/dev/null 2>&1 || true
         return 0
     fi
-
-    # Do not shadow a different system command (for example ping, net or reg).
-    # The corresponding impacket-* command remains globally available instead.
-    system_existing="$(PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin command -v -- "$name" 2>/dev/null || true)"
-    if [[ -n "$system_existing" ]]; then
+    if [[ -e "$dest" ]]; then
+        warn "$dest exists and is not a git checkout; left untouched"
         return 0
     fi
-
-    ln -s -- "$target" "$dest"
+    mkdir -p -- "$(dirname -- "$dest")"
+    GIT_TERMINAL_PROMPT=0 timeout 900 git clone -q --depth 1 -- "$url" "$dest"
 }
 
-
-make_managed_python_entrypoint() {
-    local name script wrapper
-    name=$1
-    script=$2
-    wrapper="$MANAGED_BIN/$name"
-    [[ -f "$script" ]] || return 1
-    mkdir -p "$MANAGED_BIN"
-    cat > "$wrapper" <<EOF
-#!/usr/bin/env bash
-exec /usr/bin/python3 $(printf '%q' "$script") "\$@"
-EOF
-    chmod 0755 "$wrapper"
-    printf '%s\n' "$wrapper"
-}
-
-
-readonly PY_NAME_MARKER='# kali-clean managed .py entry point'
-
-# Expose "<tool>.py" (the spelling used by Impacket's README and HTB Academy)
-# next to the short name. This must be a small wrapper, NOT a symlink: Kali's
-# /usr/bin/impacket-* launchers derive the script to run from the name they
-# were invoked as, so a symlink called secretsdump.py would try to open
-# secretsdump.py.py.
-install_py_name_wrapper() {
-    local short=$1 target=$2 name dest existing
-    name="$short.py"
-    dest="$LOCAL_BIN/$name"
-
-    [[ "$short" != */* && -n "$short" ]] || return 0
-    [[ -x "$target" ]] || return 0
-    mkdir -p "$LOCAL_BIN"
-
-    if [[ -L "$dest" ]]; then
-        # Earlier broken symlinks pointing at an impacket launcher are ours to fix.
-        case "$(readlink -- "$dest" 2>/dev/null || true)" in
-            */impacket-*) rm -f -- "$dest" ;;
-            *) warn "Leaving existing user command untouched: $dest"; return 0 ;;
+# A file in ~/.local/bin that kali-clean created earlier and may replace.
+is_managed_command() {
+    local path=$1 link
+    if [[ -L "$path" ]]; then
+        link="$(readlink -- "$path" 2>/dev/null || true)"
+        case "$link" in
+            /usr/bin/impacket-*|"$MANAGED_BIN"/*|"$TOOLS"/*|"$KC_SHARE"/*) return 0 ;;
         esac
-    elif [[ -e "$dest" ]]; then
-        # Refresh wrappers we (or the standalone add-py-names.sh) created; never
-        # touch anything else.
-        if grep -qE "^(${PY_NAME_MARKER}|# made by add-py-names\.sh)\$" "$dest" 2>/dev/null; then
+        return 1
+    fi
+    [[ -f "$path" ]] && head -n 3 -- "$path" 2>/dev/null \
+        | grep -qE "^(${WRAPPER_MARK}|# kali-clean managed \.py entry point|# made by add-py-names\.sh)\$"
+}
+
+# wrap NAME INTERPRETER TARGET — ~/.local/bin/NAME runs TARGET (with INTERPRETER, if given).
+# Never replaces your own files and never hides a command the system already has.
+wrap() {
+    local name=$1 interp=$2 target=$3 dest existing
+    dest="$LOCAL_BIN/$name"
+    [[ -n "$name" && "$name" != */* ]] || return 1
+    [[ -e "$target" ]] || return 1
+    existing="$(PATH="$SYSTEM_PATH" command -v -- "$name" 2>/dev/null || true)"
+    if [[ -n "$existing" && "$existing" != "$dest" ]]; then
+        return 0
+    fi
+    if [[ -e "$dest" || -L "$dest" ]]; then
+        if is_managed_command "$dest"; then
             rm -f -- "$dest"
         else
-            warn "Leaving existing user command untouched: $dest"
             return 0
         fi
     fi
-
-    # Do not shadow a real <tool>.py elsewhere in PATH (e.g. a pipx Impacket).
-    existing="$(command -v -- "$name" 2>/dev/null || true)"
-    [[ -z "$existing" || "$existing" == "$dest" ]] || return 0
-
-    printf '#!/usr/bin/env bash\n%s\nexec %q "$@"\n' "$PY_NAME_MARKER" "$target" > "$dest"
+    mkdir -p -- "$LOCAL_BIN"
+    {
+        printf '#!/usr/bin/env bash\n%s\n' "$WRAPPER_MARK"
+        if [[ -n "$interp" ]]; then
+            printf 'exec %q %q "$@"\n' "$interp" "$target"
+        else
+            printf 'exec %q "$@"\n' "$target"
+        fi
+    } > "$dest"
     chmod 0755 "$dest"
 }
 
-
-install_impacket_shortcuts() {
-    local pkg source base short lower prefixed example wrapper resolved
-    local -a sources=()
-    local manifest="$STATE_DIR/impacket-shortcuts.tsv"
-
-    dpkg-query -W -f='${Status}' impacket-scripts 2>/dev/null | grep -q 'install ok installed' || return 0
-    info 'Creating collision-safe short commands for every installed Impacket script...'
-
-    # Prefer Kali's packaged /usr/bin/impacket-* entry points. These remain
-    # package-managed and survive Impacket upgrades; ~/.local/bin contains only
-    # lightweight convenience symlinks such as wmiexec -> impacket-wmiexec.
-    while IFS= read -r source; do
-        [[ -x "$source" ]] && sources+=("$source")
-    done < <(
-        for pkg in impacket-scripts python3-impacket; do
-            dpkg-query -W -f='${Status}' "$pkg" 2>/dev/null | grep -q 'install ok installed' || continue
-            dpkg -L "$pkg" 2>/dev/null || true
-        done | awk '/^\/usr\/bin\/impacket-/ {print}' | sort -u
-    )
-
-    # If Kali has gained a new Impacket example but impacket-scripts has not yet
-    # exposed it, create a home-owned prefixed wrapper. This never edits /usr.
-    if [[ -d /usr/share/doc/python3-impacket/examples ]]; then
-        while IFS= read -r -d '' example; do
-            short="$(basename "$example" .py)"
-            prefixed="$(command -v -- "impacket-$short" 2>/dev/null || true)"
-            if [[ -n "$prefixed" ]]; then
-                sources+=("$prefixed")
-            else
-                wrapper="$(make_managed_python_entrypoint "impacket-$short" "$example")" || continue
-                sources+=("$wrapper")
-            fi
-        done < <(find /usr/share/doc/python3-impacket/examples -maxdepth 1 -type f -name '*.py' -print0 | sort -z)
-    fi
-
-    : > "$manifest"
-    for source in "${sources[@]}"; do
-        base="$(basename "$source")"
-        short="${base#impacket-}"
-        [[ "$short" != "$base" ]] || continue
-
-        install_user_command_link "$short" "$source"
-        resolved="$(command -v -- "$short" 2>/dev/null || true)"
-        [[ -n "$resolved" ]] && printf '%s\t%s\n' "$short" "$resolved" >> "$manifest"
-
-        # secretsdump.py, GetUserSPNs.py, ... (original casing only). This also
-        # covers names whose short form collides with a system command, so
-        # smbclient.py / mimikatz.py / net.py reach Impacket, not Samba etc.
-        install_py_name_wrapper "$short" "$source"
-        resolved="$(command -v -- "$short.py" 2>/dev/null || true)"
-        [[ -n "$resolved" ]] && printf '%s\t%s\n' "$short.py" "$resolved" >> "$manifest"
-
-        # Also add a lowercase form when it is safe. This makes commands such as
-        # GetUserSPNs usable as getuserspns without shadowing existing utilities.
-        lower="$(printf '%s' "$short" | tr '[:upper:]' '[:lower:]')"
-        if [[ "$lower" != "$short" ]]; then
-            install_user_command_link "$lower" "$source"
-            resolved="$(command -v -- "$lower" 2>/dev/null || true)"
-            [[ -n "$resolved" ]] && printf '%s\t%s\n' "$lower" "$resolved" >> "$manifest"
-        fi
-    done
-
-    # Common CPTS spelling: Kali intentionally names the binary certipy-ad.
-    # Expose certipy too when no unrelated command already owns that name.
-    if command -v certipy-ad >/dev/null 2>&1; then
-        install_user_command_link certipy "$(command -v certipy-ad)"
-    fi
-
-    # These are the high-value aliases we explicitly guarantee for the AD/CPTS
-    # profile. The underlying impacket-* names remain available as well.
-    for short in wmiexec smbexec psexec secretsdump ntlmrelayx GetUserSPNs GetNPUsers getTGT getST mssqlclient lookupsid rbcd dacledit owneredit atexec dcomexec; do
-        if ! command -v -- "$short" >/dev/null 2>&1; then
-            prefixed="$(command -v -- "impacket-$short" 2>/dev/null || true)"
-            [[ -n "$prefixed" ]] || die "Impacket is installed but required entry point is unavailable: $short"
-            install_user_command_link "$short" "$prefixed"
-        fi
-        command -v -- "$short" >/dev/null 2>&1 || die "Failed to expose Impacket command globally: $short"
-    done
-
-    sort -u -o "$manifest" "$manifest" 2>/dev/null || true
-    ok 'Impacket short commands (and <tool>.py names) are available through ~/.local/bin.'
+# alias_cmd NAME TARGET_COMMAND — NAME runs an existing command.
+alias_cmd() {
+    local path
+    path="$(PATH="$LOCAL_BIN:$SYSTEM_PATH" command -v -- "$2" 2>/dev/null || true)"
+    [[ -n "$path" && "$path" != "$LOCAL_BIN/$1" ]] || return 0
+    wrap "$1" '' "$path" || true
 }
 
-
-verify_tool_command_surface() {
-    local cmd
-    local -a required=(
-        wmiexec smbexec psexec secretsdump ntlmrelayx GetUserSPNs GetNPUsers getTGT getST
-        mssqlclient lookupsid rbcd dacledit owneredit atexec dcomexec
-    )
-
-    dpkg-query -W -f='${Status}' impacket-scripts 2>/dev/null | grep -q 'install ok installed' || return 0
-    export PATH="$LOCAL_BIN:$MANAGED_BIN:$PATH"
-
-    for cmd in "${required[@]}"; do
-        command -v -- "$cmd" >/dev/null 2>&1 || die "Tool command is not reachable through PATH: $cmd"
-        command -v -- "$cmd.py" >/dev/null 2>&1 || die "Tool command is not reachable through PATH: $cmd.py"
-    done
-
-    # A .py name must reach the real script, not "<tool>.py.py" (the symlink bug).
-    local py_check
-    py_check="$(cd / && secretsdump.py -h 2>&1 || true)"
-    if [[ "$py_check" == *'.py.py'* ]]; then
-        die 'secretsdump.py resolves to a broken .py.py path.'
-    fi
-
-    # Verify the commands resolve without relying on the current directory.
-    ( cd / && command -v wmiexec >/dev/null && command -v smbexec >/dev/null && command -v psexec >/dev/null ) || \
-        die 'Impacket shortcuts are not independent of the current working directory.'
-    ok 'Global command-surface verification passed.'
-}
-
-
-verify_i3_config() {
-    if command -v i3 >/dev/null 2>&1 && [[ -f "$HOME/.config/i3/config" ]]; then
-        info 'Validating i3 configuration...'
-        i3 -C -c "$HOME/.config/i3/config" >/dev/null || die 'i3 rejected ~/.config/i3/config.'
-    fi
-}
-
-
-verify_user_configs() {
-    local file tmux_socket="kali-clean-check-$$"
-
-    info 'Validating installed shell and desktop configuration files...'
-    for file in "$HOME"/.config/i3/blocks/* "$HOME"/.config/i3/scripts/*.sh; do
-        [[ -f "$file" ]] || continue
-        bash -n "$file" || die "Bash syntax validation failed: $file"
-        [[ -x "$file" ]] || die "Required i3 helper is not executable: $file"
-    done
-    if [[ -f "$HOME/.fehbg" ]]; then
-        sh -n "$HOME/.fehbg" || die 'Wallpaper entry-point syntax validation failed.'
-        [[ -x "$HOME/.fehbg" ]] || die 'Wallpaper entry point is not executable: ~/.fehbg'
-    fi
-    [[ ! -f "$HOME/.zshrc" ]] || zsh -n "$HOME/.zshrc" || die 'zsh rejected ~/.zshrc.'
-    [[ ! -f "$HOME/.config/kali-clean/env-sync.zsh" ]] || \
-        zsh -n "$HOME/.config/kali-clean/env-sync.zsh" || die 'zsh rejected env-sync.zsh.'
-
-    if [[ -f "$HOME/.config/kali-clean/env-sync.py" ]]; then
-        python3 -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' \
-            "$HOME/.config/kali-clean/env-sync.py" || die 'Python rejected env-sync.py.'
-    fi
-
-    for file in "$HOME/.config/kali-clean/apply-theme.sh" "$HOME/.config/kali-clean/theme-menu.sh"; do
-        [[ -f "$file" ]] || continue
-        bash -n "$file" || die "Bash syntax validation failed: $file"
-        [[ -x "$file" ]] || die "Required theme helper is not executable: $file"
-    done
-
-    if [[ -f "$HOME/.config/i3/status.py" ]]; then
-        python3 -c 'import pathlib,sys; compile(pathlib.Path(sys.argv[1]).read_text(), sys.argv[1], "exec")' \
-            "$HOME/.config/i3/status.py" || die 'Python rejected i3/status.py.'
-        python3 "$HOME/.config/i3/status.py" --once >/dev/null || die 'i3 status self-check failed.'
-    fi
-
-    if [[ -f "$HOME/.config/alacritty/alacritty.toml" ]]; then
-        python3 -c 'import sys,tomllib; tomllib.load(open(sys.argv[1], "rb"))' \
-            "$HOME/.config/alacritty/alacritty.toml" || die 'Alacritty TOML is invalid.'
-    fi
-
-    for file in "$HOME"/.config/kali-clean/themes/*/alacritty-theme.toml; do
-        [[ -f "$file" ]] || continue
-        python3 -c 'import sys,tomllib; tomllib.load(open(sys.argv[1], "rb"))' "$file" || \
-            die "Theme Alacritty TOML is invalid: $file"
-    done
-
-    # Start an isolated throwaway tmux server so tmux itself parses the config.
-    if [[ -f "$HOME/.tmux.conf" ]]; then
-        if tmux -L "$tmux_socket" -f "$HOME/.tmux.conf" new-session -d -s config-check 'sleep 2'; then
-            tmux -L "$tmux_socket" kill-server >/dev/null 2>&1 || true
-        else
-            tmux -L "$tmux_socket" kill-server >/dev/null 2>&1 || true
-            die 'tmux rejected ~/.tmux.conf.'
-        fi
-    fi
-}
-
-
-verify_apt_health() {
-    local audit
-    info 'Checking dpkg/APT health...'
-    audit="$(sudo dpkg --audit 2>&1)" || die "dpkg audit failed: $audit"
-    [[ -z "$audit" ]] || die "dpkg reports unfinished or inconsistent package state:
-$audit"
-    sudo apt-get check >/dev/null || die 'APT dependency check failed. Repair the package state before continuing.'
-    ok 'APT/dpkg health check passed.'
-}
-
-
-
-preflight_required_packages() {
-    local pkg
-    local -a missing=()
-    info 'Preflighting all required package names against this Kali rolling snapshot...'
-    for pkg in "${SYSTEM_PACKAGES[@]}" "${SECURITY_PACKAGES[@]}"; do
-        apt_has_package "$pkg" || missing+=("$pkg")
-    done
-    if grep -Eqi 'vmware' /sys/class/dmi/id/{product_name,sys_vendor} 2>/dev/null; then
-        apt_has_package open-vm-tools-desktop || missing+=(open-vm-tools-desktop)
-    fi
-    ((${#missing[@]} == 0)) || die "Required Kali package(s) have no installable candidate: ${missing[*]}"
-    ok 'All required Kali package names have installable candidates.'
-}
-
-install_system_packages() {
-    info 'Installing the Kali i3 desktop and workstation foundation...'
-    apt_install_required "${SYSTEM_PACKAGES[@]}"
-    apt_install_available "${QOL_PACKAGES[@]}"
-
-    if grep -Eqi 'vmware' /sys/class/dmi/id/{product_name,sys_vendor} 2>/dev/null; then
-        info 'VMware detected; installing guest integration.'
-        apt_install_required open-vm-tools-desktop
-    fi
-}
-
-install_security_tools() {
-    info 'Installing the HTB / HackSmarter / CPTS workstation toolset...'
-    apt_install_required "${SECURITY_PACKAGES[@]}"
-    apt_install_available "${OPTIONAL_SECURITY_PACKAGES[@]}"
-}
-
-apply_wallpaper_preference() {
-    local selected="$HOME/.wallpaper/$WALLPAPER_CHOICE"
-    [[ -f "$selected" ]] || { WALLPAPER_CHOICE='default.png'; selected="$HOME/.wallpaper/default.png"; }
-    [[ -f "$selected" ]] || die 'No bundled wallpaper was installed.'
-    ln -sfn "$WALLPAPER_CHOICE" "$HOME/.wallpaper/current"
-    /usr/bin/env bash "$HOME/.config/i3/scripts/set-wallpaper.sh" --check || die 'Selected wallpaper failed validation.'
-    if [[ -n "${DISPLAY:-}" ]]; then
-        /usr/bin/env bash "$HOME/.config/i3/scripts/set-wallpaper.sh" >/dev/null 2>&1 || warn 'Could not apply the wallpaper in the current desktop session; i3 will apply it at login.'
-    fi
-}
-
-apply_theme_preference() {
-    local theme='obsidian'
-    if [[ -f "$HOME/.config/kali-clean/theme" ]]; then
-        case "$(cat "$HOME/.config/kali-clean/theme" 2>/dev/null || true)" in
-            neon) theme='neon' ;;
-            obsidian) theme='obsidian' ;;
+safe_link() {
+    local target=$1 link=$2 current
+    [[ -e "$target" ]] || return 0
+    mkdir -p -- "$(dirname -- "$link")"
+    if [[ -L "$link" ]]; then
+        current="$(readlink -- "$link" 2>/dev/null || true)"
+        [[ "$current" == "$target" ]] && return 0
+        case "$current" in
+            /usr/share/*) ln -sfn -- "$target" "$link" ;;
         esac
+        return 0
     fi
-    /usr/bin/env bash "$HOME/.config/kali-clean/apply-theme.sh" "$theme" --quiet
-    ok "Desktop theme: $theme (Mod+Shift+T to switch live)"
+    [[ -e "$link" ]] && return 0
+    ln -s -- "$target" "$link"
 }
 
+gh_release() {
+    # gh_release OWNER/REPO REGEX DEST_DIR — download matching assets of the latest release.
+    local repo=$1 regex=$2 dest=$3 json name url digest tmp actual got=0
+    local -a auth=()
+    [[ -n "${GITHUB_TOKEN:-}" ]] && auth=(-H "Authorization: Bearer $GITHUB_TOKEN")
+    json="$(curl -fsSL --retry 3 --connect-timeout 20 -H 'Accept: application/vnd.github+json' "${auth[@]}" \
+        "https://api.github.com/repos/$repo/releases/latest" 2>/dev/null)" || {
+        warn "GitHub: no release info for $repo (offline or rate-limited; set GITHUB_TOKEN and re-run)"
+        return 0
+    }
+    mkdir -p -- "$dest"
+    while IFS=$'\t' read -r name url digest; do
+        [[ -n "$name" && -n "$url" ]] || continue
+        if [[ -s "$dest/$name" ]]; then
+            got=1
+            continue
+        fi
+        tmp="$(mktemp)"
+        if curl -fsSL --retry 3 --connect-timeout 20 -o "$tmp" "$url" 2>/dev/null; then
+            if [[ "$digest" == sha256:* ]]; then
+                actual="$(sha256sum "$tmp" | awk '{print $1}')"
+                if [[ "$actual" != "${digest#sha256:}" ]]; then
+                    rm -f -- "$tmp"
+                    warn "GitHub: checksum mismatch for $repo/$name; discarded"
+                    continue
+                fi
+            fi
+            install -m 0644 -- "$tmp" "$dest/$name"
+            got=1
+        else
+            warn "GitHub: download failed for $repo/$name"
+        fi
+        rm -f -- "$tmp"
+    done < <(jq -r --arg re "$regex" '.assets[]? | select(.name | test($re)) | [.name, .browser_download_url, (.digest // "")] | @tsv' <<< "$json")
+    ((got)) || warn "GitHub: no asset of $repo matched /$regex/"
+    return 0
+}
 
-install_oh_my_zsh() {
-    apt_install_required zsh-autosuggestions zsh-syntax-highlighting
-    if [[ -d "$HOME/.oh-my-zsh/.git" ]]; then
-        git -C "$HOME/.oh-my-zsh" pull --ff-only || warn 'Oh My Zsh update skipped.'
-    elif [[ ! -e "$HOME/.oh-my-zsh" ]]; then
-        info 'Installing Oh My Zsh without curl|sh...'
-        git clone --depth 1 https://github.com/ohmyzsh/ohmyzsh.git "$HOME/.oh-my-zsh" || warn 'Could not clone Oh My Zsh; the supplied zsh config still works without it.'
-    else
-        warn "$HOME/.oh-my-zsh exists and is not a git checkout; leaving it untouched."
+pipx_get() {
+    # pipx_get PACKAGE_NAME SPEC [INJECT...]
+    local pkg=$1 spec=$2
+    shift 2
+    have pipx || return 1
+    if pipx list --short 2>/dev/null | awk '{print $1}' | grep -qx -- "$pkg"; then
+        return 0
+    fi
+    timeout 900 pipx install --quiet "$spec" >/dev/null 2>&1 || { warn "pipx: could not install $pkg"; return 0; }
+    if (($#)); then
+        pipx inject --quiet "$pkg" "$@" >/dev/null 2>&1 || warn "pipx: could not add $(words "$@") to $pkg"
     fi
 }
 
-verify_runtime_surface() {
-    local cmd
-    local -a required=(
-        i3 rofi feh flameshot alacritty zsh tmux pipx git curl firefox-esr
-        nmap rustscan autorecon ffuf feroxbuster nxc evil-winrm evil-winrm-py certipy-ad
-        bloodhound-start bloodhound-ce-python xfreerdp chisel ligolo-proxy penelope
-        msfconsole searchsploit smbclient rpcclient podman
-    )
-    local -a missing=()
-    export PATH="$LOCAL_BIN:$MANAGED_BIN:$PATH"
-    for cmd in "${required[@]}"; do
-        command -v "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+# ============================================================== tools
+setup_directories() {
+    mkdir -p -- "$TOOLS"/{windows,linux,pivot,ad,web,passwords,venvs} "$HOME/wordlists" "$HOME/vpn" \
+        "$HOME/labs" "$HOME/logs/tmux" "$HOME/Pictures/Screenshots" \
+        "$HOME/htb"/{vpn,machines,challenges,academy,notes,loot,screenshots,tools} \
+        "$HOME/hacksmarter"/{vpn,labs,notes,loot,screenshots,tools} \
+        "$LOCAL_BIN" "$MANAGED_BIN"
+}
+
+install_wordlists() {
+    local tmp
+    safe_link /usr/share/seclists "$HOME/wordlists/SecLists"
+    safe_link /usr/share/payloadsallthethings "$HOME/wordlists/PayloadsAllTheThings"
+    safe_link /usr/share/wordlists "$HOME/wordlists/kali"
+    if [[ ! -e "$HOME/wordlists/rockyou.txt" ]]; then
+        if [[ -f /usr/share/wordlists/rockyou.txt.gz ]]; then
+            info 'Unpacking rockyou.txt into ~/wordlists...'
+            tmp="$HOME/wordlists/.rockyou.$$"
+            gzip -dc /usr/share/wordlists/rockyou.txt.gz > "$tmp" && mv -f -- "$tmp" "$HOME/wordlists/rockyou.txt"
+        elif [[ -f /usr/share/wordlists/rockyou.txt ]]; then
+            safe_link /usr/share/wordlists/rockyou.txt "$HOME/wordlists/rockyou.txt"
+        fi
+    fi
+    ok 'Wordlists: ~/wordlists (rockyou, SecLists, PayloadsAllTheThings)'
+}
+
+# Every Impacket example as NAME, NAME.py and lowercase name (secretsdump,
+# secretsdump.py, getuserspns ...). Wrappers call Kali's /usr/bin/impacket-*.
+install_impacket_names() {
+    local src base short lower
+    local -a launchers=()
+    mapfile -t launchers < <(find /usr/bin -maxdepth 1 -name 'impacket-*' -perm -u+x 2>/dev/null | sort)
+    ((${#launchers[@]})) || { warn 'Impacket launchers not found (/usr/bin/impacket-*)'; return 0; }
+    for src in "${launchers[@]}"; do
+        base="${src##*/}"
+        short="${base#impacket-}"
+        [[ -n "$short" && "$short" != "$base" ]] || continue
+        wrap "$short" '' "$src" || true
+        wrap "$short.py" '' "$src" || true
+        lower="${short,,}"
+        [[ "$lower" == "$short" ]] || wrap "$lower" '' "$src" || true
     done
-    ((${#missing[@]} == 0)) || die "Installation completed with missing required commands: ${missing[*]}"
+    ok "Impacket: ${#launchers[@]} tools as name, name.py and lowercase"
+}
 
-    [[ -L "$HOME/.wallpaper/current" ]] || die '~/.wallpaper/current was not created.'
-    [[ -L "$HOME/.config/kali-clean/current" ]] || die 'Theme selector symlink was not created.'
-    [[ -f "$HOME/.config/kali-clean/current/i3-theme.conf" ]] || die 'Active i3 theme is missing.'
-    [[ -f "$HOME/.config/kali-clean/current/tmux-theme.conf" ]] || die 'Active tmux theme is missing.'
-    /usr/bin/env bash "$HOME/.config/i3/scripts/set-wallpaper.sh" --check || die 'Wallpaper runtime check failed.'
-    python3 "$HOME/.config/i3/status.py" --once >/dev/null || die 'Top-bar status runtime check failed.'
+# John the Ripper ships ssh2john, office2john, ... as commands; HTB Academy
+# calls them ssh2john.py, office2john.py, pdf2john.pl. Add those spellings,
+# using the extension of the script each command really runs.
+install_john_names() {
+    local f name real kind
+    for f in /usr/share/john/*2john*.py /usr/share/john/*2john*.pl; do
+        [[ -f "$f" ]] || continue
+        name="${f##*/}"
+        case "$name" in
+            *.py) wrap "$name" /usr/bin/python3 "$f" || true ;;
+            *.pl) wrap "$name" /usr/bin/perl "$f" || true ;;
+        esac
+    done
+    for f in /usr/bin/*2john; do
+        [[ -x "$f" ]] || continue
+        name="${f##*/}"
+        real="$(readlink -f -- "$f" 2>/dev/null || printf '%s' "$f")"
+        case "$real" in
+            *.py) kind=py ;;
+            *.pl) kind=pl ;;
+            *)
+                kind=''
+                if head -c 200 -- "$real" 2>/dev/null | head -n 1 | grep -q python; then
+                    kind=py
+                elif head -c 200 -- "$real" 2>/dev/null | head -n 1 | grep -q perl; then
+                    kind=pl
+                fi
+                ;;
+        esac
+        [[ -n "$kind" ]] && { wrap "$name.$kind" '' "$f" || true; }
+    done
+    return 0
+}
 
-    # Ensure the terminal command itself is healthy. We do not launch a GUI
-    # window during unattended verification.
-    alacritty --version >/dev/null || die 'Alacritty executable self-check failed.'
+install_command_names() {
+    install_john_names
+    alias_cmd Responder.py responder
+    alias_cmd RunFinger.py responder-RunFinger
+    alias_cmd MultiRelay.py responder-MultiRelay
+    alias_cmd krbrelayx.py krbrelayx
+    alias_cmd addspn.py addspn
+    alias_cmd dnstool.py dnstool
+    alias_cmd printerbug.py printerbug
+    alias_cmd certipy certipy-ad
+    alias_cmd bloodyAD bloodyad
+    alias_cmd bloodyAD.py bloodyad
+    alias_cmd evil-winrm.py evil-winrm-py
+    alias_cmd enum4linux-ng.py enum4linux-ng
+    alias_cmd odat.py odat
+    alias_cmd pywhisker.py pywhisker
+    if have crackmapexec; then
+        alias_cmd cme crackmapexec
+    else
+        alias_cmd crackmapexec nxc
+        alias_cmd cme nxc
+    fi
+    ok 'Tool names: *2john.py/.pl, Responder.py, krbrelayx.py, certipy, cme, evil-winrm.py, ...'
+}
 
-    verify_i3_config
-    verify_user_configs
-    ok 'Desktop/runtime verification passed.'
+install_git_tools() {
+    local d
+    info 'Fetching GitHub tools into ~/tools (shallow clones)...'
+    # Active Directory (attacker side)
+    git_get "$TOOLS/ad/targetedKerberoast" https://github.com/ShutdownRepo/targetedKerberoast.git || warn 'targetedKerberoast clone failed'
+    git_get "$TOOLS/ad/PKINITtools" https://github.com/dirkjanm/PKINITtools.git || warn 'PKINITtools clone failed'
+    git_get "$TOOLS/ad/gMSADumper" https://github.com/micahvandeusen/gMSADumper.git || warn 'gMSADumper clone failed'
+    git_get "$TOOLS/ad/PetitPotam" https://github.com/topotam/PetitPotam.git || warn 'PetitPotam clone failed'
+    git_get "$TOOLS/ad/noPac" https://github.com/Ridter/noPac.git || warn 'noPac clone failed'
+    git_get "$TOOLS/ad/CVE-2021-1675" https://github.com/cube0x0/CVE-2021-1675.git || warn 'CVE-2021-1675 clone failed'
+    git_get "$TOOLS/ad/windapsearch" https://github.com/ropnop/windapsearch.git || warn 'windapsearch clone failed'
+    # Passwords / web
+    git_get "$TOOLS/passwords/username-anarchy" https://github.com/urbanadventurer/username-anarchy.git || warn 'username-anarchy clone failed'
+    git_get "$TOOLS/passwords/firefox_decrypt" https://github.com/unode/firefox_decrypt.git || warn 'firefox_decrypt clone failed'
+    git_get "$TOOLS/passwords/mimipenguin" https://github.com/huntergregal/mimipenguin.git || warn 'mimipenguin clone failed'
+    git_get "$TOOLS/web/XXEinjector" https://github.com/enjoiz/XXEinjector.git || warn 'XXEinjector clone failed'
+    # Linux targets
+    git_get "$TOOLS/linux/LinEnum" https://github.com/rebootuser/LinEnum.git || warn 'LinEnum clone failed'
+    git_get "$TOOLS/linux/linux-smart-enumeration" https://github.com/diego-treitos/linux-smart-enumeration.git || warn 'lse clone failed'
+    git_get "$TOOLS/linux/linux-exploit-suggester" https://github.com/The-Z-Labs/linux-exploit-suggester.git || warn 'les clone failed'
+    git_get "$TOOLS/linux/static-binaries" https://github.com/andrew-d/static-binaries.git || warn 'static-binaries clone failed'
+    # Windows targets
+    git_get "$TOOLS/windows/SharpCollection" https://github.com/Flangvik/SharpCollection.git || warn 'SharpCollection clone failed'
+    git_get "$TOOLS/windows/nc" https://github.com/int0x33/nc.exe.git || warn 'nc.exe clone failed'
+    git_get "$TOOLS/windows/Inveigh" https://github.com/Kevin-Robertson/Inveigh.git || warn 'Inveigh clone failed'
+    git_get "$TOOLS/windows/DomainPasswordSpray" https://github.com/dafthack/DomainPasswordSpray.git || warn 'DomainPasswordSpray clone failed'
+    git_get "$TOOLS/windows/LAPSToolkit" https://github.com/leoloobeek/LAPSToolkit.git || warn 'LAPSToolkit clone failed'
+    git_get "$TOOLS/windows/PowerUpSQL" https://github.com/NetSPI/PowerUpSQL.git || warn 'PowerUpSQL clone failed'
+    git_get "$TOOLS/windows/Invoke-TheHash" https://github.com/Kevin-Robertson/Invoke-TheHash.git || warn 'Invoke-TheHash clone failed'
+    git_get "$TOOLS/windows/JAWS" https://github.com/411Hall/JAWS.git || warn 'JAWS clone failed'
+    git_get "$TOOLS/windows/SessionGopher" https://github.com/Arvanaghi/SessionGopher.git || warn 'SessionGopher clone failed'
+    git_get "$TOOLS/windows/ADRecon" https://github.com/adrecon/ADRecon.git || warn 'ADRecon clone failed'
+    git_get "$TOOLS/windows/Invoke-DOSfuscation" https://github.com/danielbohannon/Invoke-DOSfuscation.git || warn 'Invoke-DOSfuscation clone failed'
+    # Pivoting
+    git_get "$TOOLS/pivot/rpivot" https://github.com/klsecservices/rpivot.git || warn 'rpivot clone failed'
+    git_get "$TOOLS/pivot/ptunnel-ng" https://github.com/utoni/ptunnel-ng.git || warn 'ptunnel-ng clone failed'
+    git_get "$TOOLS/pivot/dnscat2-powershell" https://github.com/lukebaggett/dnscat2-powershell.git || warn 'dnscat2-powershell clone failed'
+
+    # Commands for the attacker-side scripts (Kali's python3 modules provide their imports).
+    d="$TOOLS/ad"
+    wrap targetedKerberoast.py /usr/bin/python3 "$d/targetedKerberoast/targetedKerberoast.py" || true
+    wrap gMSADumper.py /usr/bin/python3 "$d/gMSADumper/gMSADumper.py" || true
+    wrap PetitPotam.py /usr/bin/python3 "$d/PetitPotam/PetitPotam.py" || true
+    wrap noPac.py /usr/bin/python3 "$d/noPac/noPac.py" || true
+    wrap noPac-scanner.py /usr/bin/python3 "$d/noPac/scanner.py" || true
+    wrap CVE-2021-1675.py /usr/bin/python3 "$d/CVE-2021-1675/CVE-2021-1675.py" || true
+    wrap printnightmare.py /usr/bin/python3 "$d/CVE-2021-1675/CVE-2021-1675.py" || true
+    wrap windapsearch.py /usr/bin/python3 "$d/windapsearch/windapsearch.py" || true
+    wrap username-anarchy /usr/bin/ruby "$TOOLS/passwords/username-anarchy/username-anarchy" || true
+    wrap firefox_decrypt.py /usr/bin/python3 "$TOOLS/passwords/firefox_decrypt/firefox_decrypt.py" || true
+    wrap firefox_decrypt /usr/bin/python3 "$TOOLS/passwords/firefox_decrypt/firefox_decrypt.py" || true
+    wrap XXEinjector.rb /usr/bin/ruby "$TOOLS/web/XXEinjector/XXEinjector.rb" || true
+    wrap xxeinjector /usr/bin/ruby "$TOOLS/web/XXEinjector/XXEinjector.rb" || true
+    ok 'GitHub tools ready in ~/tools'
+}
+
+# PKINITtools needs minikerberos + an OpenSSL-3-compatible oscrypto: own venv.
+install_pkinittools() {
+    local venv="$TOOLS/venvs/pkinittools" src="$TOOLS/ad/PKINITtools" f
+    [[ -d "$src" ]] || return 0
+    if [[ ! -x "$venv/bin/python" ]] || ! "$venv/bin/python" -c 'import minikerberos, oscrypto, impacket' >/dev/null 2>&1; then
+        info 'Building the PKINITtools Python environment...'
+        rm -rf -- "$venv"
+        python3 -m venv "$venv"
+        "$venv/bin/pip" install -q --upgrade pip >/dev/null
+        "$venv/bin/pip" install -q impacket minikerberos 'oscrypto @ git+https://github.com/wbond/oscrypto.git' >/dev/null
+    fi
+    for f in gettgtpkinit.py getnthash.py gets4uticket.py; do
+        wrap "$f" "$venv/bin/python" "$src/$f" || true
+    done
+    ok 'PKINITtools: gettgtpkinit.py, getnthash.py, gets4uticket.py'
+}
+
+install_pipx_tools() {
+    have pipx || { warn 'pipx missing; Python tools skipped'; return 0; }
+    info 'Installing Python tools with pipx (isolated, in your home)...'
+    pipx_get pywhisker 'git+https://github.com/ShutdownRepo/pywhisker.git'
+    pipx_get adidnsdump adidnsdump
+    pipx_get defaultcreds-cheat-sheet defaultcreds-cheat-sheet
+    pipx_get git-dumper git-dumper
+    pipx_get uploadserver uploadserver
+    pipx_get wesng wesng
+    pipx_get o365spray 'git+https://github.com/0xZDH/o365spray.git'
+    pipx_get pre2k 'git+https://github.com/garrettfoster13/pre2k.git'
+    pipx_get droopescan droopescan
+    pipx_get bashfuscator 'git+https://github.com/Bashfuscator/Bashfuscator.git'
+    have wsgidav || pipx_get wsgidav wsgidav cheroot
+    alias_cmd pywhisker.py pywhisker
+    ok 'pipx tools: pywhisker, adidnsdump, creds, git-dumper, uploadserver, wes, wsgidav, ...'
+}
+
+install_release_binaries() {
+    local w="$TOOLS/windows"
+    info 'Downloading release binaries from GitHub...'
+    gh_release ropnop/kerbrute '^kerbrute_linux_amd64$' "$MANAGED_BIN/dl"
+    if [[ -s "$MANAGED_BIN/dl/kerbrute_linux_amd64" ]]; then
+        install -m 0755 -- "$MANAGED_BIN/dl/kerbrute_linux_amd64" "$MANAGED_BIN/kerbrute"
+        wrap kerbrute '' "$MANAGED_BIN/kerbrute" || true
+    fi
+    gh_release ropnop/go-windapsearch '^windapsearch-linux-amd64$' "$MANAGED_BIN/dl"
+    if [[ -s "$MANAGED_BIN/dl/windapsearch-linux-amd64" ]]; then
+        install -m 0755 -- "$MANAGED_BIN/dl/windapsearch-linux-amd64" "$MANAGED_BIN/windapsearch"
+        wrap windapsearch '' "$MANAGED_BIN/windapsearch" || true
+    fi
+    gh_release ropnop/kerbrute '^kerbrute_windows_amd64\.exe$' "$w/kerbrute"
+    gh_release BeichenDream/GodPotato '^GodPotato.*\.exe$' "$w/potatoes"
+    gh_release itm4n/PrintSpoofer '^PrintSpoofer(32|64)\.exe$' "$w/potatoes"
+    gh_release ohpe/juicy-potato '^JuicyPotato.*\.exe$' "$w/potatoes"
+    gh_release antonioCoco/JuicyPotatoNG '\.zip$' "$w/potatoes"
+    gh_release antonioCoco/RoguePotato '\.zip$' "$w/potatoes"
+    gh_release antonioCoco/RunasCs '\.zip$' "$w/RunasCs"
+    gh_release AlessandroZ/LaZagne '^LaZagne.*\.exe$' "$w/LaZagne"
+    gh_release itm4n/PrivescCheck '^PrivescCheck\.ps1$' "$w/PrivescCheck"
+    gh_release netwrix/pingcastle '\.zip$' "$w/PingCastle"
+    gh_release nccgroup/SocksOverRDP '\.zip$' "$TOOLS/pivot/SocksOverRDP"
+    if [[ ! -s "$w/Sysinternals/PsExec64.exe" ]]; then
+        local tmp
+        tmp="$(mktemp)"
+        if curl -fsSL --retry 3 --connect-timeout 20 -o "$tmp" https://download.sysinternals.com/files/SysinternalsSuite.zip; then
+            mkdir -p -- "$w/Sysinternals"
+            unzip -q -o "$tmp" -d "$w/Sysinternals" || warn 'Sysinternals: unzip failed'
+        else
+            warn 'Sysinternals: download failed'
+        fi
+        rm -f -- "$tmp"
+    fi
+    ok 'Release binaries: kerbrute, windapsearch, potatoes, RunasCs, LaZagne, PrivescCheck, PingCastle, Sysinternals'
+}
+
+link_transfer_dirs() {
+    local w="$TOOLS/windows" l="$TOOLS/linux" p="$TOOLS/pivot"
+    safe_link /usr/share/windows-resources "$w/kali-windows-resources"
+    safe_link /usr/share/windows-resources/binaries "$w/binaries"
+    safe_link /usr/share/windows-resources/mimikatz "$w/mimikatz"
+    safe_link /usr/share/windows-resources/rubeus "$w/rubeus"
+    if [[ -d /usr/share/windows-resources/powersploit ]]; then
+        safe_link /usr/share/windows-resources/powersploit "$w/PowerSploit"
+    else
+        safe_link /usr/share/powersploit "$w/PowerSploit"
+    fi
+    safe_link /usr/share/windows-resources/powercat "$w/powercat"
+    safe_link /usr/share/nishang "$w/nishang"
+    safe_link /usr/share/sharphound "$w/sharphound"
+    safe_link /usr/share/peass/winpeas "$w/winpeas"
+    safe_link /usr/share/peass/linpeas/linpeas.sh "$l/linpeas.sh"
+    safe_link /usr/share/pspy "$l/pspy"
+    safe_link /usr/share/chisel-common-binaries "$p/chisel"
+    safe_link /usr/share/ligolo-ng-common-binaries "$p/ligolo-ng"
+    safe_link /usr/share/webshells "$TOOLS/web/webshells"
+    safe_link /usr/share/laudanum "$TOOLS/web/laudanum"
+    install -m 0644 -- "$SCRIPT_DIR/tools/README.txt" "$TOOLS/README.txt"
+    ok 'Transfer folders: ~/tools/windows, ~/tools/linux, ~/tools/pivot (see ~/tools/README.txt)'
+}
+
+install_tools() {
+    section 'Tools'
+    setup_directories
+    optional 'Wordlists' install_wordlists
+    optional 'Impacket names' install_impacket_names
+    optional 'GitHub tools' install_git_tools
+    optional 'PKINITtools' install_pkinittools
+    optional 'pipx tools' install_pipx_tools
+    optional 'Release binaries' install_release_binaries
+    optional 'Command names' install_command_names
+    optional 'Transfer folders' link_transfer_dirs
+}
+
+# ============================================================== verification
+verify_desktop() {
+    section 'Checks'
+    local sock="kc-verify-$$" out
+    i3_config_ok "$HOME/.config/i3/config" || die 'i3 rejected ~/.config/i3/config'
+    python3 "$HOME/.config/i3/status.py" --once >/dev/null || die 'The i3 bar status script failed its self-test'
+    zsh -n "$HOME/.zshrc" || die 'zsh rejected ~/.zshrc'
+    out="$(tmux -L "$sock" -f /dev/null new-session -d -s check 'sleep 10' \; source-file "$HOME/.tmux.conf" 2>&1)" || {
+        tmux -L "$sock" kill-server >/dev/null 2>&1 || true
+        die "tmux rejected ~/.tmux.conf: $out"
+    }
+    tmux -L "$sock" kill-server >/dev/null 2>&1 || true
+    bash "$HOME/.config/i3/scripts/set-wallpaper.sh" --check || warn 'Wallpaper check failed'
+    ok 'i3, bar, zsh, tmux and wallpaper checks passed'
+}
+
+readonly -a EXPECTED_COMMANDS=(
+    nmap rustscan masscan autorecon ffuf gobuster feroxbuster dirsearch wfuzz whatweb nikto wpscan sqlmap burpsuite
+    nxc netexec crackmapexec cme evil-winrm evil-winrm-py certipy-ad certipy bloodyad bloodhound-ce-python
+    bloodhound-python bloodhound-start kerbrute windapsearch windapsearch.py ldapsearch ldapdomaindump ldeep
+    enum4linux enum4linux-ng smbclient smbmap rpcclient responder Responder.py mitm6 coercer krbrelayx.py
+    PetitPotam.py gettgtpkinit.py getnthash.py targetedKerberoast.py pywhisker gMSADumper.py noPac.py
+    CVE-2021-1675.py adidnsdump snaffler secretsdump.py GetUserSPNs.py GetNPUsers.py psexec.py wmiexec.py
+    smbexec.py ntlmrelayx.py smbserver.py mssqlclient.py lookupsid.py ticketer.py raiseChild.py
+    hashcat john ssh2john.py office2john.py hydra cewl cupp username-anarchy creds gpp-decrypt
+    msfconsole msfvenom searchsploit chisel ligolo-proxy sshuttle proxychains4 socat rlwrap penelope
+    xfreerdp3 odat swaks smtp-user-enum onesixtyone snmpwalk ipmitool linpeas wes uploadserver goshs
+    git-dumper firefox_decrypt.py
+)
+
+report_commands() {
+    local cmd
+    local -a missing=()
+    for cmd in "${EXPECTED_COMMANDS[@]}"; do
+        PATH="$LOCAL_BIN:$MANAGED_BIN:$SYSTEM_PATH" command -v -- "$cmd" >/dev/null 2>&1 || missing+=("$cmd")
+    done
+    if ((${#missing[@]})); then
+        warn "Commands not available: $(words "${missing[@]}")"
+    fi
+    ok "$(( ${#EXPECTED_COMMANDS[@]} - ${#missing[@]} ))/${#EXPECTED_COMMANDS[@]} key commands available from any directory"
 }
 
 print_summary() {
-    printf '\n%b%bInstallation complete.%b\n\n' "$C_BOLD" "$C_GREEN" "$C_RESET"
-    printf 'Log:            %s\n' "$LOG_FILE"
-    printf 'Backups:        %s\n' "$BACKUP_ROOT"
-    printf 'Wallpaper:      %s\n' "$HOME/.wallpaper/$WALLPAPER_CHOICE"
-    printf 'Tools:          %s\n' "$TOOLS_DIR"
-    printf 'Labs:           %s\n' "$LAB_ROOT"
-    printf 'VPN:            %s\n' "$HOME/vpn"
-    printf 'HTB VPN:        %s\n' "$HOME/htb/vpn"
-    printf 'HackSmarter VPN:%s\n' " $HOME/hacksmarter/vpn"
-    printf 'Wordlists:      %s\n\n' "$HOME/wordlists"
-    printf 'Reboot and select i3. Mod+Enter opens the terminal; Mod+Shift+B changes wallpaper; Mod+Shift+T changes theme.\n'
-    printf 'The top-bar VPN address is left-click copyable.\n'
-    printf 'Persistent lab vars: export ip=10.10.11.23 ; export ip2=10.10.11.24 ; persistedenv\n'
-    printf 'BloodHound is installed but not initialized automatically. When needed: sudo bloodhound-setup\n'
+    printf '\n%s%sDone.%s Reboot (or log out) and pick %si3%s at the login screen.\n\n' \
+        "$C_BOLD" "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET"
+    printf '  %-16s %s\n' 'Tools' "$TOOLS  (index: ~/tools/README.txt)"
+    printf '  %-16s %s\n' 'Wordlists' "$HOME/wordlists"
+    printf '  %-16s %s\n' 'tmux logs' "$HOME/logs/tmux  (prefix + P)"
+    printf '  %-16s %s\n' 'Screenshots' "$HOME/Pictures/Screenshots  (Print)"
+    printf '  %-16s %s\n' 'Backups' "${BACKUP_DIR:-$BACKUP_ROOT}"
+    printf '  %-16s %s\n' 'Log' "$LOG_FILE"
+    if [[ -s "$ISSUES_FILE" ]]; then
+        printf '\n%sNotes (%s) — nothing here breaks the desktop:%s\n' "$C_YELLOW" "$(wc -l < "$ISSUES_FILE")" "$C_RESET"
+        sed 's/^/  - /' "$ISSUES_FILE"
+    fi
+    printf '\n%sBloodHound CE is installed but not set up; when you need it: sudo bloodhound-setup%s\n' "$C_DIM" "$C_RESET"
 }
 
+# ============================================================== main
 main() {
-    (($# == 0)) || die 'This installer takes no options. Run exactly: ./install.sh'
+    if (($#)); then
+        case "$1" in
+            -h|--help) sed -n '2,20p' "$0"; return 0 ;;
+            *) die 'This installer takes no options. Run: ./install.sh' ;;
+        esac
+    fi
     require_normal_user
     require_kali
     choose_wallpaper
-    prime_sudo
+    start_sudo
 
-    apt_refresh
-    verify_apt_health
-    preflight_required_packages
-    apt_preflight_resolution
-    install_system_packages
-    install_security_tools
-    verify_apt_health
-
-    # Everything below is user-owned except the login-shell field changed by chsh.
-    setup_lab_directories
-    install_wordlists
-    install_username_anarchy
-    install_bloodhound_cli
-    install_bloodhound_cli_runtime
-    install_geist_mono
-    install_oh_my_zsh
-
-    install_repo_dotfiles
-    apply_font_fallback
-    apply_wallpaper_preference
+    install_packages
+    install_dotfiles
+    apply_wallpaper
+    optional 'tmux plugins' install_tmux_plugins
     configure_login_shell
-    configure_default_browser
-    install_firefox_customizations
-    apply_theme_preference
+    optional 'Firefox' install_firefox
+    install_tools
 
-    install_impacket_shortcuts
-    link_kali_resources_into_home
-    verify_tool_command_surface
-    verify_runtime_surface
-    verify_apt_health
+    verify_desktop
+    report_commands
     print_summary
 }
 

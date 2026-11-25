@@ -1,60 +1,45 @@
 #!/usr/bin/env python3
-"""Small, dependency-free i3bar status generator for kali-clean.
+"""kali-clean i3bar status: CPU, RAM, disk, VPN IP, target IP, date/time.
 
-Shows CPU, RAM, root filesystem free space, VPN IPv4 and date/time.  The VPN
-block is clickable: left click copies the detected VPN IPv4 to the clipboard.
+Click the VPN or TARGET block (left button) to copy that address.
+Standard library only; never exits on its own errors.
+
+    status.py            stream for i3bar (status_command)
+    status.py --once     print one block array and exit (self-test)
 """
 
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import os
-from pathlib import Path
-import re
 import select
 import shutil
-import subprocess
 import sys
 import time
+from pathlib import Path
 from typing import Any
 
-VPN_RE = re.compile(r"^(tun|tap|wg|vpn|ppp|tailscale)")
-DEFAULT_VPN_ORDER = ("tun0", "tun1", "tun2", "wg0", "wg1", "tap0", "tap1", "ppp0", "tailscale0")
+sys.path.insert(0, str(Path(os.environ.get("XDG_CONFIG_HOME") or Path.home() / ".config") / "kali-clean"))
+try:
+    import kcinfo  # shared with tmux and zsh
+except Exception:  # pragma: no cover - keep the bar alive without the helper
+    kcinfo = None
 
-
-DEFAULT_THEME = {
-    "default": "#9aa1ab",
-    "bright": "#d8dce2",
-    "dim": "#666d77",
-    "cpu": "#9aa1ab",
-    "memory": "#9aa1ab",
-    "disk": "#9aa1ab",
-    "vpn": "#d8dce2",
-    "clock": "#d8dce2",
-}
-
-
-def theme_colors() -> dict[str, str]:
-    path = Path.home() / ".config/kali-clean/current/status.json"
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError):
-        return dict(DEFAULT_THEME)
-    merged = dict(DEFAULT_THEME)
-    for key, value in data.items():
-        if key in merged and isinstance(value, str) and value.startswith("#"):
-            merged[key] = value
-    return merged
+LABEL = "#71717a"
+VALUE = "#f5f5f5"
+BRIGHT = "#ffffff"
+EMPTY = "#52525b"
 
 
 def cpu_totals() -> tuple[int, int]:
-    fields = Path("/proc/stat").read_text(encoding="utf-8").splitlines()[0].split()
+    with open("/proc/stat", encoding="utf-8") as fh:
+        fields = fh.readline().split()
     values = [int(v) for v in fields[1:]]
-    # user nice system idle iowait irq softirq steal guest guest_nice
     idle = values[3] + (values[4] if len(values) > 4 else 0)
-    non_idle = sum(values[0:3]) + sum(values[5:8])
-    return idle + non_idle, idle
+    busy = sum(values[0:3]) + sum(values[5:8])
+    return idle + busy, idle
 
 
 class CpuSampler:
@@ -63,200 +48,128 @@ class CpuSampler:
 
     def sample(self) -> int:
         total, idle = cpu_totals()
-        delta_total = total - self.total
-        delta_idle = idle - self.idle
+        d_total, d_idle = total - self.total, idle - self.idle
         self.total, self.idle = total, idle
-        if delta_total <= 0:
+        if d_total <= 0:
             return 0
-        value = round(100 * (delta_total - delta_idle) / delta_total)
-        return max(0, min(100, value))
+        return max(0, min(100, round(100 * (d_total - d_idle) / d_total)))
 
 
-def memory_text() -> str:
+def memory() -> tuple[float, float]:
     values: dict[str, int] = {}
-    with open("/proc/meminfo", "r", encoding="utf-8") as handle:
-        for line in handle:
+    with open("/proc/meminfo", encoding="utf-8") as fh:
+        for line in fh:
             key, _, rest = line.partition(":")
-            if key in {"MemTotal", "MemAvailable"}:
-                values[key] = int(rest.strip().split()[0])
-    total = values.get("MemTotal", 0)
-    available = values.get("MemAvailable", 0)
-    used = max(0, total - available)
-    return f"RAM {used / 1048576:.1f}Gi / {total / 1048576:.1f}Gi"
+            if key in ("MemTotal", "MemAvailable"):
+                values[key] = int(rest.split()[0])
+    total = values.get("MemTotal", 0) / 1048576
+    used = max(0.0, total - values.get("MemAvailable", 0) / 1048576)
+    return used, total
 
 
-def disk_text() -> str:
-    free = shutil.disk_usage("/").free
-    gib = free / (1024 ** 3)
-    if gib >= 100:
-        return f"DISK {gib:.0f}G free"
-    return f"DISK {gib:.1f}G free"
+def disk_free_gib() -> float:
+    return shutil.disk_usage("/").free / (1024 ** 3)
 
 
-def _vpn_interfaces_from_env() -> list[str]:
-    raw = os.environ.get("KALI_CLEAN_VPN_INTERFACES", "").strip()
-    if not raw:
-        return list(DEFAULT_VPN_ORDER)
-    return [part for part in re.split(r"[\s,]+", raw) if part]
+def span(text: str, color: str, bold: bool = False) -> str:
+    weight = " font_weight='bold'" if bold else ""
+    return f"<span foreground='{color}'{weight}>{html.escape(text)}</span>"
 
 
-def vpn_info() -> tuple[str, str]:
-    try:
-        result = subprocess.run(
-            ["ip", "-j", "-4", "addr", "show"],
-            text=True,
-            capture_output=True,
-            timeout=2,
-            check=False,
-        )
-        if result.returncode != 0:
-            return "", ""
-        data = json.loads(result.stdout or "[]")
-    except (OSError, subprocess.SubprocessError, json.JSONDecodeError):
-        return "", ""
-
-    addresses: dict[str, str] = {}
-    for entry in data:
-        iface = str(entry.get("ifname", ""))
-        if not iface:
-            continue
-        for addr in entry.get("addr_info", []):
-            if addr.get("family") != "inet":
-                continue
-            ip = str(addr.get("local", ""))
-            if ip and not ip.startswith("127."):
-                addresses.setdefault(iface, ip)
-                break
-
-    for iface in _vpn_interfaces_from_env():
-        if iface in addresses:
-            return iface, addresses[iface]
-    for iface, ip in addresses.items():
-        if VPN_RE.match(iface):
-            return iface, ip
-    return "", ""
-
-
-def block(text: str, *, name: str, min_width: str | None = None, color: str) -> dict[str, Any]:
-    item: dict[str, Any] = {
-        "full_text": text,
+def block(name: str, label: str, value: str, *, value_color: str = VALUE, bold: bool = False) -> dict[str, Any]:
+    text = (span(label, LABEL) + " " if label else "") + span(value, value_color, bold)
+    return {
         "name": name,
-        "color": color,
-        "separator": True,
-        "separator_block_width": 10,
+        "full_text": text,
+        "markup": "pango",
+        "separator": False,
+        "separator_block_width": 22,
     }
-    if min_width:
-        item["min_width"] = min_width
-        item["align"] = "right"
-    return item
 
 
 def make_blocks(cpu: CpuSampler) -> list[dict[str, Any]]:
-    colors = theme_colors()
-    _, vpn_ip = vpn_info()
+    used, total = memory()
+    free = disk_free_gib()
+    vpn = kcinfo.vpn_ip()[1] if kcinfo else ""
+    target = kcinfo.target_ip() if kcinfo else ""
     return [
-        block(f"CPU {cpu.sample()}%", name="cpu", min_width="CPU 100%", color=colors["cpu"]),
-        block(memory_text(), name="memory", min_width="RAM 99.9Gi / 99.9Gi", color=colors["memory"]),
-        block(disk_text(), name="disk", min_width="DISK 999G free", color=colors["disk"]),
-        block(
-            f"VPN {vpn_ip or '--'}",
-            name="vpn",
-            min_width="VPN 000.000.000.000",
-            color=colors["vpn"] if vpn_ip else colors["dim"],
-        ),
-        block(time.strftime("%A, %d %B %Y %H:%M:%S"), name="clock", color=colors["clock"]),
+        block("cpu", "CPU", f"{cpu.sample()}%"),
+        block("memory", "RAM", f"{used:.1f}/{total:.1f}G"),
+        block("disk", "DISK", f"{free:.0f}G free"),
+        block("vpn", "VPN", vpn or "--", value_color=BRIGHT if vpn else EMPTY, bold=bool(vpn)),
+        block("target", "TARGET", target or "--", value_color=BRIGHT if target else EMPTY, bold=bool(target)),
+        block("clock", "", time.strftime("%a %d %b %Y  %H:%M:%S") + " ", value_color=VALUE),
     ]
 
 
-def copy_vpn() -> None:
-    iface, ip = vpn_info()
-    if not ip:
-        return
-    payload = ip.encode()
-    copied = False
-    for command in (["xclip", "-selection", "clipboard", "-in"], ["xsel", "--clipboard", "--input"]):
-        if shutil.which(command[0]) is None:
-            continue
-        try:
-            completed = subprocess.run(command, input=payload, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=False)
-            copied = completed.returncode == 0
-        except OSError:
-            copied = False
-        if copied:
-            break
-    if shutil.which("notify-send"):
-        message = f"{ip} ({iface})" if copied else f"Could not copy {ip}"
-        subprocess.run(
-            ["notify-send", "-a", "kali-clean", "VPN address" if not copied else "VPN address copied", message],
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            check=False,
-        )
+def safe_blocks(cpu: CpuSampler) -> list[dict[str, Any]]:
+    try:
+        return make_blocks(cpu)
+    except Exception as exc:  # never let i3bar show "status_command process exited"
+        return [{"name": "error", "full_text": f"status: {exc}", "color": "#f87171"}]
 
 
-def handle_click_line(line: str) -> None:
-    value = line.strip()
-    if not value or value == "[":
-        return
-    value = value.lstrip(",").strip()
-    if not value or value in {"[", "]"}:
+def handle_click(line: str) -> None:
+    value = line.strip().lstrip(",").strip()
+    if not value or value in ("[", "]"):
         return
     try:
         event = json.loads(value)
-    except json.JSONDecodeError:
+    except ValueError:
         return
-    if event.get("name") == "vpn" and event.get("button") == 1:
-        copy_vpn()
+    if event.get("button") != 1 or kcinfo is None:
+        return
+    if event.get("name") == "vpn":
+        kcinfo.copy("vpn")
+    elif event.get("name") == "target":
+        kcinfo.copy("target")
 
 
 def run_stream() -> int:
     cpu = CpuSampler()
-    # Give the CPU sampler a useful first delta without making login feel slow.
-    time.sleep(0.08)
+    time.sleep(0.1)  # give the CPU sampler a first delta
     print(json.dumps({"version": 1, "click_events": True}), flush=True)
     print("[", flush=True)
     first = True
-
+    stdin_open = True
     while True:
-        prefix = "" if first else ","
-        print(prefix + json.dumps(make_blocks(cpu), separators=(",", ":")), flush=True)
+        print(("" if first else ",") + json.dumps(safe_blocks(cpu), separators=(",", ":")), flush=True)
         first = False
-
         deadline = time.monotonic() + 1.0
         while True:
-            timeout = deadline - time.monotonic()
-            if timeout <= 0:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            if not stdin_open:
+                time.sleep(remaining)
                 break
             try:
-                ready, _, _ = select.select([sys.stdin], [], [], timeout)
+                ready, _, _ = select.select([sys.stdin], [], [], remaining)
             except (OSError, ValueError):
-                time.sleep(timeout)
-                break
+                stdin_open = False
+                continue
             if not ready:
                 break
             line = sys.stdin.readline()
             if line == "":
-                time.sleep(max(0.0, timeout))
-                break
-            handle_click_line(line)
+                stdin_open = False  # i3bar closed our stdin; keep printing
+                continue
+            handle_click(line)
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(add_help=True)
-    parser.add_argument("--once", action="store_true", help="print one JSON block array and exit")
-    parser.add_argument("--vpn-ip", action="store_true", help="print only the detected VPN IPv4")
+    parser = argparse.ArgumentParser(description="kali-clean i3bar status")
+    parser.add_argument("--once", action="store_true", help="print one block array and exit")
     args = parser.parse_args()
-
-    if args.vpn_ip:
-        print(vpn_info()[1])
-        return 0
-
-    cpu = CpuSampler()
     if args.once:
-        time.sleep(0.08)
-        print(json.dumps(make_blocks(cpu)))
+        cpu = CpuSampler()
+        time.sleep(0.1)
+        print(json.dumps(safe_blocks(cpu)))
         return 0
-    return run_stream()
+    try:
+        return run_stream()
+    except (BrokenPipeError, KeyboardInterrupt):
+        return 0
 
 
 if __name__ == "__main__":

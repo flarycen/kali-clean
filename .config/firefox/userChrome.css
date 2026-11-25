@@ -1,62 +1,86 @@
-/* kali-clean Firefox chrome. Theme variables are refreshed by Mod+Shift+T. */
-@import url("kali-clean-theme.css");
+/* kali-clean — Firefox chrome on top of the built-in dark theme.
+ * Same palette as i3/Alacritty: #060606 ground, #0a0a0a surface,
+ * #1f1f1f hairlines, #f5f5f5 text, white focus. Square everywhere. */
 
 :root {
-  --toolbar-bgcolor: var(--kc-bg) !important;
-  --toolbar-color: var(--kc-fg) !important;
-  --toolbar-field-background-color: var(--kc-surface) !important;
-  --toolbar-field-color: var(--kc-fg) !important;
-  --toolbar-field-border-color: var(--kc-border) !important;
-  --lwt-accent-color: var(--kc-bg) !important;
-  --lwt-text-color: var(--kc-fg) !important;
-  --tab-selected-bgcolor: var(--kc-surface-2) !important;
-  --tab-selected-textcolor: var(--kc-fg) !important;
+  --kc-ground: #060606;
+  --kc-surface: #0a0a0a;
+  --kc-raised: #141414;
+  --kc-hairline: #1f1f1f;
+  --kc-dim: #71717a;
+  --kc-text: #f5f5f5;
+  --kc-focus: #ffffff;
+
+  --toolbar-bgcolor: var(--kc-surface) !important;
+  --toolbar-color: var(--kc-text) !important;
+  --toolbar-field-background-color: var(--kc-ground) !important;
+  --toolbar-field-focus-background-color: var(--kc-ground) !important;
+  --toolbar-field-color: var(--kc-text) !important;
+  --toolbar-field-focus-color: var(--kc-text) !important;
+  --toolbar-field-border-color: var(--kc-hairline) !important;
+  --toolbar-field-focus-border-color: var(--kc-focus) !important;
+  --lwt-accent-color: var(--kc-ground) !important;
+  --lwt-text-color: var(--kc-text) !important;
+  --tab-selected-bgcolor: var(--kc-raised) !important;
+  --tab-selected-textcolor: var(--kc-focus) !important;
   --arrowpanel-background: var(--kc-surface) !important;
-  --arrowpanel-color: var(--kc-fg) !important;
-  --arrowpanel-border-color: var(--kc-border) !important;
+  --arrowpanel-color: var(--kc-text) !important;
+  --arrowpanel-border-color: var(--kc-hairline) !important;
+  --toolbarbutton-hover-background: var(--kc-hairline) !important;
+  --toolbarbutton-active-background: var(--kc-raised) !important;
+  --focus-outline-color: var(--kc-focus) !important;
+  --tab-border-radius: 0px !important;
+  --toolbarbutton-border-radius: 0px !important;
+  --arrowpanel-border-radius: 0px !important;
 }
 
 #navigator-toolbox,
-#nav-bar,
 #TabsToolbar,
-#PersonalToolbar {
-  background: var(--kc-bg) !important;
-  color: var(--kc-fg) !important;
+#nav-bar,
+#PersonalToolbar,
+#titlebar {
+  background: var(--kc-ground) !important;
+  color: var(--kc-text) !important;
+  border: none !important;
   box-shadow: none !important;
 }
 
-#navigator-toolbox { border-bottom: 1px solid var(--kc-border) !important; }
+#nav-bar {
+  background: var(--kc-surface) !important;
+  border-top: 1px solid var(--kc-hairline) !important;
+  border-bottom: 1px solid var(--kc-hairline) !important;
+}
 
-.tab-background,
+.tab-background {
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  margin-block: 0 !important;
+}
+
+.tabbrowser-tab[selected] .tab-background {
+  background: var(--kc-raised) !important;
+  border-bottom: 1px solid var(--kc-focus) !important;
+}
+
+.tabbrowser-tab:not([selected]) .tab-label {
+  color: var(--kc-dim) !important;
+}
+
 #urlbar-background,
-.searchbar-textbox,
-.toolbarbutton-1 {
+#searchbar {
   border-radius: 0 !important;
   box-shadow: none !important;
 }
 
-.tabbrowser-tab[selected] .tab-background {
-  background: var(--kc-surface-2) !important;
-  outline: 1px solid var(--kc-accent) !important;
+#urlbar[focused] #urlbar-background {
+  outline: 1px solid var(--kc-focus) !important;
   outline-offset: -1px !important;
-}
-
-.tabbrowser-tab:not([selected]) .tab-background { background: var(--kc-bg) !important; }
-
-#urlbar-background {
-  background: var(--kc-surface) !important;
-  border: 1px solid var(--kc-border) !important;
-}
-
-toolbarbutton:hover > .toolbarbutton-icon,
-toolbarbutton:hover > .toolbarbutton-text,
-toolbarbutton:hover > .toolbarbutton-badge-stack {
-  background-color: var(--kc-surface-2) !important;
 }
 
 menupopup,
 panel {
   --panel-background: var(--kc-surface) !important;
-  --panel-color: var(--kc-fg) !important;
-  --panel-border-color: var(--kc-border) !important;
+  --panel-color: var(--kc-text) !important;
+  --panel-border-color: var(--kc-hairline) !important;
+  --panel-border-radius: 0px !important;
 }

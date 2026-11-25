@@ -1,21 +1,33 @@
-# kali-clean — i3 configuration
-# Theme switcher: Mod+Shift+T
-# Wallpaper switcher: Mod+Shift+B
-# No compositor is started: VMware + picom caused Thunar/GTK repaint corruption.
+# i3 config file (v4)
+# kali-clean — i3
+# Pebl3-style: near-black, 1px square borders, small gaps, white focus border.
+# Mod = Super. No compositor: picom caused Thunar/GTK repaint corruption in VMware.
 
 set $mod Mod4
 set $term /usr/bin/env bash ~/.config/i3/scripts/open-terminal-cwd.sh
-set $menu rofi -show drun -theme ~/.config/kali-clean/current/rofi.rasi
+set $menu rofi -show drun
 
-font pango:Geist Mono 10
+font pango:JetBrains Mono 10
 
+# ---------------------------------------------------------------- look
 default_border pixel 1
 default_floating_border pixel 1
+for_window [class=".*"] border pixel 1
 hide_edge_borders none
-gaps inner 6
-gaps outer 0
-smart_gaps on
+gaps inner 4
+gaps outer 2
+smart_gaps off
+title_align left
 
+#                       border  bg      text    indicator child_border
+client.focused          #ffffff #0a0a0a #f5f5f5 #ffffff   #ffffff
+client.focused_inactive #1f1f1f #0a0a0a #71717a #1f1f1f   #1f1f1f
+client.unfocused        #1f1f1f #060606 #52525b #1f1f1f   #1f1f1f
+client.urgent           #ef4444 #7a2e2e #ffffff #ef4444   #ef4444
+client.placeholder      #1f1f1f #060606 #52525b #1f1f1f   #1f1f1f
+client.background       #060606
+
+# ---------------------------------------------------------------- behaviour
 focus_follows_mouse no
 mouse_warping none
 workspace_auto_back_and_forth yes
@@ -23,41 +35,43 @@ popup_during_fullscreen smart
 focus_on_window_activation smart
 floating_modifier $mod
 
-# xct/Pebl3 directional keys.
+# xct / Pebl3 directional keys (arrows work too).
 set $left  j
 set $down  k
 set $up    l
 set $right semicolon
 
-# Applications.
+# ---------------------------------------------------------------- apps
 bindsym $mod+Return exec --no-startup-id $term
 bindsym $mod+d exec --no-startup-id $menu
 bindsym $mod+Shift+f exec --no-startup-id firefox-esr
+bindsym $mod+Shift+n exec --no-startup-id thunar
+bindsym $mod+Shift+b exec --no-startup-id /usr/bin/env bash ~/.config/i3/scripts/wallpaper-menu.sh
 bindsym $mod+Shift+p exec --no-startup-id flameshot gui
 bindsym Print exec --no-startup-id flameshot gui
-bindsym $mod+Shift+b exec --no-startup-id /usr/bin/env bash ~/.config/i3/scripts/wallpaper-menu.sh
-bindsym $mod+Shift+t exec --no-startup-id /usr/bin/env bash ~/.config/kali-clean/theme-menu.sh
-bindsym $mod+Shift+n exec --no-startup-id thunar
+bindsym Shift+Print exec --no-startup-id flameshot full -p ~/Pictures/Screenshots
+bindsym $mod+Shift+x exec --no-startup-id /usr/bin/env bash ~/.config/i3/scripts/lock.sh
 
-# Window management.
+# ---------------------------------------------------------------- windows
 bindsym $mod+Shift+q kill
-bindsym $mod+$left focus left
-bindsym $mod+$down focus down
-bindsym $mod+$up focus up
-bindsym $mod+$right focus right
-bindsym $mod+Left focus left
-bindsym $mod+Down focus down
-bindsym $mod+Up focus up
-bindsym $mod+Right focus right
 
-bindsym $mod+Shift+$left move left
-bindsym $mod+Shift+$down move down
-bindsym $mod+Shift+$up move up
+bindsym $mod+$left  focus left
+bindsym $mod+$down  focus down
+bindsym $mod+$up    focus up
+bindsym $mod+$right focus right
+bindsym $mod+Left   focus left
+bindsym $mod+Down   focus down
+bindsym $mod+Up     focus up
+bindsym $mod+Right  focus right
+
+bindsym $mod+Shift+$left  move left
+bindsym $mod+Shift+$down  move down
+bindsym $mod+Shift+$up    move up
 bindsym $mod+Shift+$right move right
-bindsym $mod+Shift+Left move left
-bindsym $mod+Shift+Down move down
-bindsym $mod+Shift+Up move up
-bindsym $mod+Shift+Right move right
+bindsym $mod+Shift+Left   move left
+bindsym $mod+Shift+Down   move down
+bindsym $mod+Shift+Up     move up
+bindsym $mod+Shift+Right  move right
 
 bindsym $mod+h split h
 bindsym $mod+v split v
@@ -69,11 +83,10 @@ bindsym $mod+Shift+space floating toggle
 bindsym $mod+space focus mode_toggle
 bindsym $mod+a focus parent
 
-# Scratchpad.
 bindsym $mod+Shift+minus move scratchpad
 bindsym $mod+minus scratchpad show
 
-# Workspaces.
+# ---------------------------------------------------------------- workspaces
 set $ws1 1
 set $ws2 2
 set $ws3 3
@@ -107,8 +120,8 @@ bindsym $mod+Shift+8 move container to workspace number $ws8
 bindsym $mod+Shift+9 move container to workspace number $ws9
 bindsym $mod+Shift+0 move container to workspace number $ws10
 
-# Resize mode.
-set $mode_resize resize: j/k/l/; or arrows · Enter/Esc to finish
+# ---------------------------------------------------------------- resize
+set $mode_resize resize  j/k/l/; or arrows  ·  Enter/Esc to finish
 mode "$mode_resize" {
     bindsym $left  resize shrink width  10 px or 10 ppt
     bindsym $down  resize grow   height 10 px or 10 ppt
@@ -123,13 +136,12 @@ mode "$mode_resize" {
 }
 bindsym $mod+r mode "$mode_resize"
 
-# Session controls.
+# ---------------------------------------------------------------- session
 bindsym $mod+Shift+c reload
 bindsym $mod+Shift+r restart
 bindsym $mod+Shift+e exec --no-startup-id i3-nagbar -t warning -m 'Exit i3 and end this session?' -B 'Exit' 'i3-msg exit'
-bindsym $mod+Shift+x exec --no-startup-id sh -c 'command -v betterlockscreen >/dev/null 2>&1 && betterlockscreen -l || i3lock-color -c 08090b'
 
-# Media / brightness.
+# ---------------------------------------------------------------- media keys
 bindsym XF86AudioRaiseVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ +5%
 bindsym XF86AudioLowerVolume exec --no-startup-id pactl set-sink-volume @DEFAULT_SINK@ -5%
 bindsym XF86AudioMute exec --no-startup-id pactl set-sink-mute @DEFAULT_SINK@ toggle
@@ -140,28 +152,47 @@ bindsym XF86AudioPrev exec --no-startup-id playerctl previous
 bindsym XF86MonBrightnessUp exec --no-startup-id brightnessctl set +5%
 bindsym XF86MonBrightnessDown exec --no-startup-id brightnessctl set 5%-
 
-# Dialogs/control panels float; normal apps tile.
+# ---------------------------------------------------------------- rules
 for_window [window_type="dialog"] floating enable
-for_window [class="^(Pavucontrol|Nm-connection-editor|Lxappearance|Arandr|Blueman-manager)$"] floating enable
+for_window [window_role="pop-up"] floating enable
+for_window [class="^(Pavucontrol|Nm-connection-editor|Lxappearance|Arandr|Blueman-manager|flameshot)$"] floating enable
 
-# Startup. Explicit interpreters make this resilient to lost executable bits.
+# ---------------------------------------------------------------- startup
 exec_always --no-startup-id /usr/bin/env bash ~/.config/i3/scripts/set-wallpaper.sh
-
-# IMPORTANT: no compositor by default. Picom caused verified Thunar/GTK repaint
-# corruption in VMware and this rice is designed to be fully opaque.
-# Do not add a picom/compton exec line here unless you intentionally accept that risk.
-
-exec --no-startup-id sh -c 'pkill -x dunst 2>/dev/null || true; exec dunst -config "$HOME/.config/kali-clean/current/dunstrc"'
+# Never blank the screen in the middle of a long scan or an exam session.
+exec --no-startup-id xset s off -dpms
+exec --no-startup-id sh -c 'pkill -x dunst 2>/dev/null; exec dunst'
 exec --no-startup-id nm-applet
-exec --no-startup-id sh -c 'command -v blueman-applet >/dev/null 2>&1 && blueman-applet'
 exec --no-startup-id sh -c 'command -v lxpolkit >/dev/null 2>&1 && exec lxpolkit'
-
-# VMware host/guest clipboard + drag/drop. Plain i3 does not reliably start it.
+# VMware host/guest clipboard + drag/drop; plain i3 does not start it.
 exec --no-startup-id sh -c 'command -v vmware-user-suid-wrapper >/dev/null 2>&1 && exec vmware-user-suid-wrapper'
-
-# Avoid a stale pointer remaining painted when the host pointer leaves the VM.
-exec --no-startup-id unclutter -idle 1 -root
+# Hide an idle pointer so it never lands in a screenshot.
+exec --no-startup-id unclutter -idle 2 -root
 exec --no-startup-id xsetroot -cursor_name left_ptr
 
-# Theme-specific client colors + i3bar. Mod+Shift+T swaps this symlink and reloads i3.
-include ~/.config/kali-clean/current/i3-theme.conf
+# ---------------------------------------------------------------- bar
+bar {
+    position top
+    mode dock
+    height 28
+    workspace_buttons yes
+    strip_workspace_numbers yes
+    workspace_min_width 28
+    binding_mode_indicator yes
+    tray_output primary
+    tray_padding 4
+    font pango:JetBrains Mono 10
+    status_command /usr/bin/python3 ~/.config/i3/status.py
+
+    colors {
+        background #0a0a0a
+        statusline #a1a1aa
+        separator  #1f1f1f
+        #                  border  bg      text
+        focused_workspace  #3f3f46 #1f1f1f #ffffff
+        active_workspace   #1f1f1f #0a0a0a #a1a1aa
+        inactive_workspace #0a0a0a #0a0a0a #71717a
+        urgent_workspace   #ef4444 #7a2e2e #ffffff
+        binding_mode       #ef4444 #7a2e2e #ffffff
+    }
+}

@@ -1,10 +1,10 @@
 # kali-clean
 
-Minimal i3 workstation for Kali, tailored for HTB / HackSmarter / CPTS-style labs. Flat, fast, dark, and intentionally compositor-free for reliable VMware use.
+Minimal i3 workstation for Kali, tailored for HTB / HackSmarter / CPTS-style labs and exams. Flat, fast, black, and intentionally compositor-free for reliable VMware use.
 
 ## ⚠️ Warning
 
-Built with help from OpenAI's GPT-5.6 Sol. **Review `install.sh` and the dotfiles yourself before running them.** The installer uses `sudo` for Kali packages/system changes and installs offensive-security tooling intended only for systems and labs you are authorized to test.
+Built with help from OpenAI's GPT-5.6 Sol and Anthropic's Claude. **Review `install.sh` and the dotfiles yourself before running them.** The installer uses `sudo` for Kali packages and installs offensive-security tooling intended only for systems and labs you are authorized to test. It never removes packages, changes no system configuration besides setting zsh as your login shell (if it isn't already), and backs up every dotfile it replaces.
 
 ## Install
 
@@ -16,37 +16,35 @@ cd kali-clean
 ./install.sh
 ```
 
-Choose a wallpaper, wait for the success message, reboot, then select **i3** from the login screen.
+Choose a wallpaper, wait for the success message, reboot, then select **i3** from the login screen. Re-running `./install.sh` is safe and fills in anything that was missing.
 
 ## QoL
 
 - `Mod+Enter` — terminal in the focused window's cwd
 - `Mod+d` — Rofi
-- `Mod+Shift+B` — wallpaper picker + optional curated Unsplash pack
-- `Mod+Shift+T` — live theme picker: **Obsidian** or **Neon**
-- `Mod+Shift+F` — Firefox
+- `Mod+Shift+B` — wallpaper picker: Contour, Black, Dots, Grid, Grain (all 4K)
+- `Mod+Shift+F` — Firefox, black, with FoxyProxy (Burp `:8080`, SOCKS `:9050` / `:1080`), Wappalyzer, Cookie-Editor
 - `Mod+Shift+N` — Thunar
-- top bar — CPU, RAM, disk, VPN IP, clock; click VPN IP to copy
-- tmux keeps normal `Ctrl-b` bindings and has a clearly highlighted active pane
-- `export ip=...`, `ip2=...`, `domain=...`, etc. persist across zsh/tmux sessions until changed or unset
-- Impacket shortcuts work globally: `wmiexec`, `smbexec`, `psexec`, `secretsdump`, `GetUserSPNs`, etc.
-- `~/htb`, `~/hacksmarter`, `~/vpn`, `~/tools`, `~/wordlists` are created automatically
+- `Print` / `Mod+Shift+P` — Flameshot, saved to `~/Pictures/Screenshots`
+- `Mod+Shift+X` — lock
+- top bar — CPU, RAM, disk, VPN IP, target IP, date and time; click VPN or TARGET to copy
+- prompt — two lines with the time each command ran, your VPN IP and path; typed commands are bold white for clean exam screenshots
+- tmux keeps every stock `Ctrl-b` binding and adds `prefix + P` pane logging to `~/logs/tmux`, `prefix + Ctrl-s` / `Ctrl-r` to save/restore sessions, splits that keep the cwd and copies that reach the host clipboard
+- `export ip=...` (or `target 10.10.11.23`), `ip2=...`, `domain=...`, etc. persist across zsh/tmux sessions until changed or unset; `ip` also shows in both bars
+- every tool runs from any directory, including the Academy spellings: `secretsdump.py`, `GetUserSPNs.py`, `ssh2john.py`, `gettgtpkinit.py`, `targetedKerberoast.py`, `evil-winrm.py`, ... and `sudo ntlmrelayx.py` works
+- `serve` — HTTP server for the current directory that prints `wget` / `iwr` commands for your VPN IP
+- `~/htb`, `~/hacksmarter`, `~/vpn`, `~/tools`, `~/wordlists` are created automatically; `~/tools/README.txt` maps the Windows, Linux and pivoting binaries
 - Picom is **not started**: this avoids the Thunar/GTK repaint bug confirmed under VMware
 - VMware's user agent is started by i3 so host/guest clipboard and drag/drop work
 
-The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE tooling, NetExec, Certipy, Evil-WinRM / evil-winrm-py, Impacket, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients.
+The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE (with the CE and legacy Python collectors), NetExec, CrackMapExec, Certipy, bloodyAD, Evil-WinRM / evil-winrm-py, Impacket, Responder, Kerbrute, windapsearch, PKINITtools, targetedKerberoast, pywhisker, krbrelayx, Coercer, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients, plus ready-to-upload binaries for targets (SharpCollection, winPEAS / linPEAS, pspy, potatoes, RunasCs, Sysinternals, ...).
 
-## Themes
-No compositor is required by either theme.
-### Dark Theme
-**Obsidian** is the default: monochrome, square, quiet, Pebl3-inspired. 
-![Dark-Theme](dark.png)
-![Dark-Theme-tmux](dark-tmux.png)
+## Look
 
-### Neon Theme
-**Neon** keeps the same layout and reliability but adds controlled cyan/violet accents across i3, tmux, Alacritty, Rofi, Dunst, the shell prompt and Firefox chrome.
-![Neon-Theme](neon.png)
-![Neon-Theme-tmux](neon-tmux.png)
+One black theme: Pebl3's near-black palette, JetBrains Mono, square 1px borders and a white border on the focused window. No compositor is required.
+
+![Desktop](desktop.png)
+![tmux](tmux.png)
 
 ## Credits
 
