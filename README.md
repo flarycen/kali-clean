@@ -8,6 +8,8 @@ Built with help from OpenAI's GPT-5.6 Sol and Anthropic's Claude. **Review `inst
 
 ## Install
 
+Before running `./install.sh`, open Firefox once and create a profile (the name doesn't matter), then close Firefox. The installer applies the black theme and the extensions to that profile.
+
 Run as your normal user, **not root**:
 
 ```bash
