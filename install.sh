@@ -646,27 +646,57 @@ firefox_bin() {
     return 1
 }
 
+# Where Firefox keeps profiles.ini. Since Firefox 147 (and Kali's ESR 153) a
+# new profile lives in $XDG_CONFIG_HOME/mozilla/firefox (~/.config/...);
+# older versions, or systems that already have ~/.mozilla/firefox, use that.
+firefox_roots() {
+    local xdg="${XDG_CONFIG_HOME:-}"
+    # Firefox ignores a relative or empty XDG_CONFIG_HOME, so do the same.
+    [[ "$xdg" == /* ]] || xdg="$HOME/.config"
+    printf '%s\n' "$HOME/.mozilla/firefox" "$xdg/mozilla/firefox"
+}
+
+# Every profile directory listed in any profiles.ini (relative paths are
+# relative to the folder that holds that profiles.ini). Printed once each.
 firefox_profiles() {
-    local ini="$HOME/.mozilla/firefox/profiles.ini" line path
-    [[ -f "$ini" ]] || return 0
-    while IFS= read -r line; do
-        [[ $line == Path=* ]] || continue
-        path="${line#Path=}"
-        [[ "$path" = /* ]] || path="$HOME/.mozilla/firefox/$path"
-        [[ -d "$path" ]] && printf '%s\n' "$path"
-    done < "$ini"
+    local root line path
+    local -A seen=()
+    while IFS= read -r root; do
+        [[ -f "$root/profiles.ini" ]] || continue
+        while IFS= read -r line || [[ -n "$line" ]]; do
+            line="${line%$'\r'}"
+            [[ $line == Path=* ]] || continue
+            path="${line#Path=}"
+            [[ "$path" == /* ]] || path="$root/$path"
+            [[ -d "$path" ]] || continue
+            path="$(cd -- "$path" && pwd -P)"
+            [[ -n "${seen[$path]+set}" ]] && continue
+            seen["$path"]=1
+            printf '%s\n' "$path"
+        done < "$root/profiles.ini"
+    done < <(firefox_roots)
+    return 0
+}
+
+firefox_roots_text() {
+    local root out=''
+    while IFS= read -r root; do
+        out+="${out:+ or }${root/#$HOME/\~}"
+    done < <(firefox_roots)
+    printf '%s' "$out"
 }
 
 ensure_firefox_profile() {
     local bin tmp
-    [[ -f "$HOME/.mozilla/firefox/profiles.ini" ]] && return 0
+    [[ -n "$(firefox_profiles)" ]] && return 0
     bin="$(firefox_bin)" || return 1
-    pgrep -u "$USER" -x "$bin" >/dev/null 2>&1 && return 0
+    # A running Firefox without a profile we can see: do not start another one.
+    pgrep -u "$USER" -f '(^|/)firefox(-esr)?( |$)' >/dev/null 2>&1 && return 1
     info 'Creating a Firefox profile (one headless start)...'
     tmp="$(mktemp -d)"
     timeout 90 "$bin" --headless --screenshot "$tmp/blank.png" about:blank >/dev/null 2>&1 || true
     rm -rf -- "$tmp"
-    [[ -f "$HOME/.mozilla/firefox/profiles.ini" ]]
+    [[ -n "$(firefox_profiles)" ]]
 }
 
 # Replace only the kali-clean block of an existing user.js.
@@ -704,7 +734,7 @@ install_firefox() {
     local profile slug tmp id
     local -a profiles=() xpis=()
     if ! ensure_firefox_profile; then
-        warn 'Firefox has no profile yet; start Firefox once and re-run ./install.sh for the black theme and add-ons.'
+        warn "Firefox: no profile found in $(firefox_roots_text). Open Firefox once, close it, then re-run ./install.sh."
         return 0
     fi
     mapfile -t profiles < <(firefox_profiles)
@@ -742,6 +772,10 @@ install_firefox() {
     rm -rf -- "$tmp"
 
     # FoxyProxy presets (Burp :8080, SOCKS5 :9050 and :1080) via managed storage.
+    # Firefox reads per-user managed storage only from ~/.mozilla/managed-storage,
+    # also in XDG mode. That is safe: Firefox switches back to the legacy profile
+    # location only when ~/.mozilla/firefox (or ~/mozilla) exists, which is never
+    # created here (toolkit/xre/nsXREDirProvider.cpp, LegacyHomeExists).
     mkdir -p -- "$HOME/.mozilla/managed-storage"
     install -m 0644 -- "$SCRIPT_DIR/.config/firefox/foxyproxy-managed.json" \
         "$HOME/.mozilla/managed-storage/foxyproxy@eric.h.jung.json"
