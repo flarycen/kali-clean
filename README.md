@@ -39,7 +39,7 @@ If it says your Kali is behind its repository, packages that would need to remov
 - `serve` — HTTP server for the current directory that prints `wget` / `iwr` commands for your VPN IP
 - `~/htb`, `~/hacksmarter`, `~/vpn`, `~/tools`, `~/wordlists` are created automatically; `~/tools/README.txt` maps the Windows, Linux and pivoting binaries
 - Picom is **not started**: this avoids the Thunar/GTK repaint bug confirmed under VMware
-- VMware's user agent is started by i3 so host/guest clipboard and drag/drop work
+- VMware's user agent is started by i3 so host/guest clipboard and drag/drop work, and the desktop follows the VMware window size (dynamic resolution, fullscreen included)
 
 The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE (with the CE and legacy Python collectors), NetExec, CrackMapExec, Certipy, bloodyAD, Evil-WinRM / evil-winrm-py, Impacket, Responder, Kerbrute, windapsearch, PKINITtools, targetedKerberoast, pywhisker, krbrelayx, Coercer, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients, plus ready-to-upload binaries for targets (SharpCollection, winPEAS / linPEAS, pspy, potatoes, RunasCs, Sysinternals, ...).
 

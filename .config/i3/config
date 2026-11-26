@@ -166,6 +166,10 @@ exec --no-startup-id nm-applet
 exec --no-startup-id sh -c 'command -v lxpolkit >/dev/null 2>&1 && exec lxpolkit'
 # VMware host/guest clipboard + drag/drop; plain i3 does not start it.
 exec --no-startup-id sh -c 'command -v vmware-user-suid-wrapper >/dev/null 2>&1 && exec vmware-user-suid-wrapper'
+# VMware dynamic resolution: follow the window size ("Autofit Guest"). Kali's X
+# driver leaves that to the desktop and i3 does not do it. One instance per
+# display, so reloads are safe; it exits at once outside a VM.
+exec_always --no-startup-id exec /usr/bin/env python3 ~/.config/i3/scripts/vm-autofit.py
 # Hide an idle pointer so it never lands in a screenshot.
 exec --no-startup-id unclutter -idle 2 -root
 exec --no-startup-id xsetroot -cursor_name left_ptr

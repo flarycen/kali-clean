@@ -514,7 +514,8 @@ check_configs() {
         zsh -n "$dir/.zshrc" || die "zsh rejected $dir/.zshrc"
         zsh -n "$dir/.config/kali-clean/env-sync.zsh" || die "zsh rejected $dir/.config/kali-clean/env-sync.zsh"
     fi
-    for f in "$dir/.config/i3/status.py" "$dir/.config/kali-clean/kcinfo.py" "$dir/.config/kali-clean/env-sync.py"; do
+    for f in "$dir/.config/i3/status.py" "$dir/.config/i3/scripts/vm-autofit.py" \
+             "$dir/.config/kali-clean/kcinfo.py" "$dir/.config/kali-clean/env-sync.py"; do
         python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || die "Python rejected $f"
     done
     python3 - "$dir/.config/alacritty/alacritty.toml" <<'PY' || die "$dir/.config/alacritty/alacritty.toml is not valid TOML"
@@ -598,7 +599,8 @@ install_dotfiles() {
         install -m 0644 -- "$SCRIPT_DIR/.wallpaper/$name" "$HOME/.wallpaper/$name"
     done
 
-    chmod 0755 "$HOME/.fehbg" "$HOME"/.config/i3/scripts/*.sh "$HOME/.config/i3/status.py"
+    chmod 0755 "$HOME/.fehbg" "$HOME"/.config/i3/scripts/*.sh "$HOME/.config/i3/scripts/vm-autofit.py" \
+        "$HOME/.config/i3/status.py"
     ok "Dotfiles installed (previous versions backed up to $BACKUP_DIR)"
 }
 
@@ -1197,6 +1199,8 @@ verify_desktop() {
     section 'Checks'
     check_configs "$HOME"
     python3 "$HOME/.config/i3/status.py" --once >/dev/null || die 'The i3 bar status script failed its self-test'
+    python3 "$HOME/.config/i3/scripts/vm-autofit.py" --self-test >/dev/null \
+        || warn 'The VMware resize helper failed its self-test (the desktop will not follow the window size)'
     bash "$HOME/.config/i3/scripts/set-wallpaper.sh" --check || warn 'Wallpaper check failed'
     local missing=() tool
     for tool in alacritty zsh tmux rofi; do
