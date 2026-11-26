@@ -510,6 +510,7 @@ check_configs() {
     for f in "$dir"/.config/i3/scripts/*.sh "$dir/.fehbg"; do
         bash -n "$f" || die "Syntax error in $f"
     done
+    sh -n "$dir/.config/kali-clean/clip-in.sh" || die "Syntax error in $dir/.config/kali-clean/clip-in.sh"
     if have zsh; then
         zsh -n "$dir/.zshrc" || die "zsh rejected $dir/.zshrc"
         zsh -n "$dir/.config/kali-clean/env-sync.zsh" || die "zsh rejected $dir/.config/kali-clean/env-sync.zsh"
@@ -563,11 +564,12 @@ install_dotfiles() {
 
     # kali-clean helpers; session.env (your persisted variables) is kept.
     mkdir -p -- "$HOME/.config/kali-clean"
-    for name in env-sync.py env-sync.zsh kcinfo.py; do
+    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh; do
         backup_path "$HOME/.config/kali-clean/$name"
         install -m 0644 -- "$SCRIPT_DIR/.config/kali-clean/$name" "$HOME/.config/kali-clean/$name"
     done
-    chmod 0755 "$HOME/.config/kali-clean/env-sync.py" "$HOME/.config/kali-clean/kcinfo.py"
+    chmod 0755 "$HOME/.config/kali-clean/env-sync.py" "$HOME/.config/kali-clean/kcinfo.py" \
+        "$HOME/.config/kali-clean/clip-in.sh"
     # Leftovers of the old theme switcher.
     for name in themes current theme apply-theme.sh theme-menu.sh; do
         dst="$HOME/.config/kali-clean/$name"

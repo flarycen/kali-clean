@@ -99,9 +99,8 @@ def notify(title: str, body: str) -> None:
         )
 
 
-def copy_to_clipboard(text: str) -> bool:
-    payload = text.encode()
-    for cmd in (["xclip", "-selection", "clipboard", "-in"], ["xsel", "--clipboard", "--input"]):
+def _set_selection(selection: str, payload: bytes) -> bool:
+    for cmd in (["xsel", f"--{selection}", "--input"], ["xclip", "-selection", selection, "-in"]):
         if shutil.which(cmd[0]) is None:
             continue
         try:
@@ -112,6 +111,15 @@ def copy_to_clipboard(text: str) -> bool:
         if done.returncode == 0:
             return True
     return False
+
+
+def copy_to_clipboard(text: str) -> bool:
+    """CLIPBOARD and PRIMARY, xsel first, so the copy reaches the VMware host
+    (see clip-in.sh for why)."""
+    payload = text.encode()
+    copied = _set_selection("clipboard", payload)
+    _set_selection("primary", payload)
+    return copied
 
 
 def copy(which: str) -> int:
