@@ -539,8 +539,8 @@ PY
 validate_shipped_configs() {
     info 'Validating the new configuration before installing it...'
     check_configs "$SCRIPT_DIR"
-    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$SCRIPT_DIR/.config/firefox/foxyproxy-managed.json" \
-        || die 'foxyproxy-managed.json is not valid JSON'
+    python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$SCRIPT_DIR/.config/firefox/foxyproxy.json" \
+        || die 'foxyproxy.json is not valid JSON'
     ok 'Configuration is valid'
 }
 
@@ -731,6 +731,57 @@ except ValueError:
 '
 }
 
+# FoxyProxy presets (Burp :8080, SOCKS5 :9050 and :1080) as normal, editable
+# settings. The first time an add-on starts in a profile, Firefox imports
+# <profile>/browser-extension-data/<id>/storage.js into its storage (the legacy
+# storage.local migration in ExtensionStorageIDB.sys.mjs). A profile where
+# FoxyProxy already started keeps its own settings.
+seed_foxyproxy() {
+    local profile=$1 id='foxyproxy@eric.h.jung' dir
+    dir="$profile/browser-extension-data/$id"
+    grep -qF "\"extensions.webextensions.ExtensionStorageIDB.migrated.$id\", true" \
+        "$profile/prefs.js" 2>/dev/null && return 0
+    [[ -e "$dir/storage.js" || -e "$dir/storage.js.migrated" ]] && return 0
+    mkdir -p -- "$dir"
+    install -m 0600 -- "$SCRIPT_DIR/.config/firefox/foxyproxy.json" "$dir/storage.js"
+}
+
+# Older kali-clean versions shipped the presets as *managed* storage, which
+# FoxyProxy treats as an administrator lock: the mode could not be changed
+# from "disable". Remove that file when it is ours.
+remove_foxyproxy_lock() {
+    local f="$HOME/.mozilla/managed-storage/foxyproxy@eric.h.jung.json"
+    [[ -f "$f" ]] && grep -qF 'kali-clean FoxyProxy presets' "$f" || return 0
+    rm -f -- "$f"
+    rmdir -- "$HOME/.mozilla/managed-storage" 2>/dev/null || true
+    rmdir -- "$HOME/.mozilla" 2>/dev/null || true
+    info 'FoxyProxy: removed the old kali-clean lock; restart Firefox once'
+}
+
+# foxyproxy_lacks_site_access PROFILE: true when Firefox has FoxyProxy
+# installed without "Access your data for all websites". It needs that to
+# route traffic, and Firefox grants it automatically only to add-ons that
+# start as fresh installs (see extensions.startupScanScopes in user.js).
+foxyproxy_lacks_site_access() {
+    python3 - "$1" <<'PY'
+import json, os, sys
+profile, addon = sys.argv[1], 'foxyproxy@eric.h.jung'
+
+def load(name):
+    try:
+        with open(os.path.join(profile, name), encoding='utf-8') as fh:
+            return json.load(fh)
+    except (OSError, ValueError):
+        return None
+
+db = load('extensions.json') or {}
+if not any(a.get('id') == addon and a.get('active') for a in db.get('addons') or []):
+    sys.exit(1)     # not installed in this profile (yet)
+granted = ((load('extension-preferences.json') or {}).get(addon) or {}).get('origins') or []
+sys.exit(0 if '<all_urls>' not in granted else 1)
+PY
+}
+
 install_firefox() {
     section 'Firefox'
     local profile slug tmp id
@@ -770,18 +821,17 @@ install_firefox() {
         for id in "${xpis[@]}"; do
             [[ -f "$profile/extensions/${id##*/}" ]] || cp -f -- "$id" "$profile/extensions/"
         done
+        seed_foxyproxy "$profile"
     done
     rm -rf -- "$tmp"
+    remove_foxyproxy_lock
 
-    # FoxyProxy presets (Burp :8080, SOCKS5 :9050 and :1080) via managed storage.
-    # Firefox reads per-user managed storage only from ~/.mozilla/managed-storage,
-    # also in XDG mode. That is safe: Firefox switches back to the legacy profile
-    # location only when ~/.mozilla/firefox (or ~/mozilla) exists, which is never
-    # created here (toolkit/xre/nsXREDirProvider.cpp, LegacyHomeExists).
-    mkdir -p -- "$HOME/.mozilla/managed-storage"
-    install -m 0644 -- "$SCRIPT_DIR/.config/firefox/foxyproxy-managed.json" \
-        "$HOME/.mozilla/managed-storage/foxyproxy@eric.h.jung.json"
     ok "Firefox styled (${#profiles[@]} profile(s)); add-ons load at next start"
+    for profile in "${profiles[@]}"; do
+        if foxyproxy_lacks_site_access "$profile"; then
+            warn "FoxyProxy cannot route traffic in ${profile/#$HOME/\~} until you allow it once: about:addons > FoxyProxy > Permissions > turn on \"Access your data for all websites\""
+        fi
+    done
 }
 
 # ============================================================== tool helpers
