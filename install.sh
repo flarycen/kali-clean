@@ -516,7 +516,8 @@ check_configs() {
         zsh -n "$dir/.config/kali-clean/env-sync.zsh" || die "zsh rejected $dir/.config/kali-clean/env-sync.zsh"
     fi
     for f in "$dir/.config/i3/status.py" "$dir/.config/i3/scripts/vm-autofit.py" \
-             "$dir/.config/kali-clean/kcinfo.py" "$dir/.config/kali-clean/env-sync.py"; do
+             "$dir/.config/kali-clean/kcinfo.py" "$dir/.config/kali-clean/env-sync.py" \
+             "$dir/.config/kali-clean/clipcheck.py"; do
         python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || die "Python rejected $f"
     done
     python3 - "$dir/.config/alacritty/alacritty.toml" <<'PY' || die "$dir/.config/alacritty/alacritty.toml is not valid TOML"
@@ -564,12 +565,12 @@ install_dotfiles() {
 
     # kali-clean helpers; session.env (your persisted variables) is kept.
     mkdir -p -- "$HOME/.config/kali-clean"
-    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh; do
+    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh clipcheck.py; do
         backup_path "$HOME/.config/kali-clean/$name"
         install -m 0644 -- "$SCRIPT_DIR/.config/kali-clean/$name" "$HOME/.config/kali-clean/$name"
     done
     chmod 0755 "$HOME/.config/kali-clean/env-sync.py" "$HOME/.config/kali-clean/kcinfo.py" \
-        "$HOME/.config/kali-clean/clip-in.sh"
+        "$HOME/.config/kali-clean/clip-in.sh" "$HOME/.config/kali-clean/clipcheck.py"
     # Leftovers of the old theme switcher.
     for name in themes current theme apply-theme.sh theme-menu.sh; do
         dst="$HOME/.config/kali-clean/$name"
@@ -624,6 +625,18 @@ install_tmux_plugins() {
         git_get "$dest" "https://github.com/$repo.git" || warn "tmux plugin $name could not be downloaded"
     done
     ok 'tmux plugins: logging + resurrect'
+}
+
+# A running tmux keeps its old settings (copy command, bindings) until it
+# reloads ~/.tmux.conf; without this, a re-run changes nothing in open sessions.
+reload_running_tmux() {
+    have tmux || return 0
+    tmux has-session 2>/dev/null || return 0
+    if tmux source-file "$HOME/.tmux.conf" >/dev/null 2>&1; then
+        ok 'Reloaded the running tmux with the new ~/.tmux.conf'
+    else
+        warn 'Could not reload the running tmux; run: tmux source-file ~/.tmux.conf'
+    fi
 }
 
 configure_login_shell() {
@@ -1327,6 +1340,7 @@ main() {
     install_dotfiles
     apply_wallpaper
     optional 'tmux plugins' install_tmux_plugins
+    reload_running_tmux
     configure_login_shell
     optional 'Firefox' install_firefox
     install_tools

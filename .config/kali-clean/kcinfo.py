@@ -100,7 +100,8 @@ def notify(title: str, body: str) -> None:
 
 
 def _set_selection(selection: str, payload: bytes) -> bool:
-    for cmd in (["xsel", f"--{selection}", "--input"], ["xclip", "-selection", selection, "-in"]):
+    for cmd in (["xsel", f"--{selection}", "--input", "--logfile", "/dev/null"],
+                ["xclip", "-selection", selection, "-in"]):
         if shutil.which(cmd[0]) is None:
             continue
         try:
