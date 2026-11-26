@@ -18,6 +18,8 @@ cd kali-clean
 
 Choose a wallpaper, wait for the success message, reboot, then select **i3** from the login screen. Re-running `./install.sh` is safe and fills in anything that was missing.
 
+If it says your Kali is behind its repository, packages that would need to remove something are skipped. For the full toolset run `sudo apt update && sudo apt full-upgrade -y && sudo reboot`, then `./install.sh` again.
+
 ## QoL
 
 - `Mod+Enter` — terminal in the focused window's cwd

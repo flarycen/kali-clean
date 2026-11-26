@@ -38,12 +38,20 @@ BACKUP_DIR=''
 SUDO_KEEPALIVE_PID=''
 
 # ============================================================== packages
-# Mandatory: without these the desktop cannot work. Checked before anything changes.
+# The only hard requirement is an i3 window manager: Kali's i3 desktop, or
+# plain i3 when that metapackage cannot be installed without removing anything.
+readonly WM_PACKAGE='kali-desktop-i3'
+readonly -a WM_FALLBACK_PACKAGES=( i3-wm i3lock )
+
+# What the desktop configuration uses (installed first, best-effort).
 readonly -a CORE_PACKAGES=(
-    kali-desktop-i3 alacritty zsh tmux ncurses-term rofi feh dunst libnotify-bin
+    alacritty zsh tmux ncurses-term rofi feh dunst libnotify-bin
     xclip xdotool x11-xserver-utils fonts-jetbrains-mono
-    git curl ca-certificates jq unzip python3 python3-venv pipx file iproute2
+    git curl ca-certificates jq unzip python3 file iproute2
 )
+
+# Only needed for the Python tools installed into your home (pipx, PKINITtools).
+readonly -a PYTHON_TOOLING_PACKAGES=( python3-venv pipx )
 
 # Desktop polish and everyday tools (best-effort).
 readonly -a DESKTOP_PACKAGES=(
@@ -202,10 +210,31 @@ is_vmware() {
 
 # ============================================================== apt
 APT_REASON=''
+APT_LAST_OUT=''
+APT_REMOVALS=''
+APT_GOOD=()
+APT_BLOCKED=()
+APT_BROKEN=()
+BLOCKED_TOTAL=0
+declare -A APT_CANDIDATE=()
+
+# One apt-cache call for many packages; apt_available() then needs no lookup.
+apt_load_candidates() {
+    local pkg val
+    while IFS=$'\t' read -r pkg val; do
+        [[ -n "$pkg" ]] && APT_CANDIDATE["$pkg"]="$val"
+    done < <(LC_ALL=C apt-cache policy -- "$@" 2>/dev/null \
+        | awk '/^[^ ].*:$/ {sub(/:$/, ""); p = $0; next} /^  Candidate:/ {print p "\t" $2}')
+    return 0
+}
 
 apt_available() {
     local candidate
-    candidate="$(LC_ALL=C apt-cache policy -- "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    if [[ -n "${APT_CANDIDATE[$1]+set}" ]]; then
+        candidate="${APT_CANDIDATE[$1]}"
+    else
+        candidate="$(LC_ALL=C apt-cache policy -- "$1" 2>/dev/null | awk '/Candidate:/ {print $2; exit}')"
+    fi
     [[ -n "$candidate" && "$candidate" != "(none)" ]]
 }
 
@@ -213,17 +242,26 @@ pkg_installed() {
     dpkg-query -W -f='${Status}' -- "$1" 2>/dev/null | grep -q 'install ok installed'
 }
 
+# Print which of the given packages are installed (one dpkg-query call).
+installed_of() {
+    dpkg-query -W -f='${Package}\t${Status}\n' -- "$@" 2>/dev/null \
+        | awk -F'\t' '$2 == "install ok installed" {print $1}'
+    return 0
+}
+
 # Succeeds only if APT can install the packages without removing anything.
 apt_simulate() {
     local out
     APT_REASON=''
     if ! out="$(LC_ALL=C apt-get -s -q install --no-upgrade -- "$@" 2>&1)"; then
+        APT_LAST_OUT="$out"
         APT_REASON="$(grep -E '^(E:| )' <<< "$out" | head -n 3 | tr -s ' \n' ' ')"
         APT_REASON="${APT_REASON:-dependency problem}"
         return 1
     fi
+    APT_LAST_OUT="$out"
     if grep -q '^Remv ' <<< "$out"; then
-        APT_REASON="would remove: $(awk '/^Remv / {print $2}' <<< "$out" | tr '\n' ' ')"
+        APT_REASON="would remove: $(awk '/^Remv / {print $2}' <<< "$out" | paste -sd ' ' -)"
         return 1
     fi
     return 0
@@ -234,62 +272,177 @@ apt_do_install() {
         -o Dpkg::Options::=--force-confdef -o Dpkg::Options::=--force-confold -- "$@"
 }
 
-# apt_install_set LABEL required|optional PKG...
-apt_install_set() {
-    local label=$1 mode=$2 pkg
-    shift 2
-    local -a todo=() missing=() good=()
+# Sort packages into APT_GOOD (installable without removing anything),
+# APT_BLOCKED (would remove an installed package) and APT_BROKEN (dependency
+# problems). Binary search, so only a few simulations are needed.
+apt_partition() {
+    (($#)) || return 0
+    if apt_simulate "$@"; then
+        APT_GOOD+=("$@")
+        return 0
+    fi
+    if (($# == 1)); then
+        if [[ "$APT_REASON" == 'would remove: '* ]]; then
+            APT_BLOCKED+=("$1")
+            APT_REMOVALS+=" ${APT_REASON#would remove: }"
+        else
+            APT_BROKEN+=("$1")
+        fi
+        return 0
+    fi
+    local half=$(( $# / 2 ))
+    apt_partition "${@:1:half}"
+    apt_partition "${@:half+1}"
+}
 
+# Packages from the arguments that are not installed yet but are in the repo.
+APT_TODO=()
+apt_collect_todo() {
+    local label=$1 pkg
+    shift
+    local -A present=()
+    local -a missing=()
+    APT_TODO=()
+    while IFS= read -r pkg; do
+        [[ -n "$pkg" ]] && present["$pkg"]=1
+    done < <(installed_of "$@")
     for pkg in "$@"; do
-        if pkg_installed "$pkg"; then
-            continue
-        elif apt_available "$pkg"; then
-            todo+=("$pkg")
+        [[ -n "${present[$pkg]+set}" ]] && continue
+        if apt_available "$pkg"; then
+            APT_TODO+=("$pkg")
         else
             missing+=("$pkg")
         fi
     done
-
-    if ((${#missing[@]})); then
-        if [[ "$mode" == required ]]; then
-            die "$label: not available in your Kali repositories: $(words "${missing[@]}") (nothing was changed)"
-        fi
+    if ((${#missing[@]})) && [[ -n "$label" ]]; then
         warn "$label: not in your Kali repositories, skipped: $(words "${missing[@]}")"
     fi
-    if ((${#todo[@]} == 0)); then
+    return 0
+}
+
+# apt_install_set LABEL PKG... — install everything that can be installed
+# without removing or upgrading what you have; report the rest. Never fatal.
+apt_install_set() {
+    local label=$1 pkg removals
+    shift
+    apt_collect_todo "$label" "$@"
+    if ((${#APT_TODO[@]} == 0)); then
         ok "$label: already installed"
         return 0
     fi
+    local -a todo=("${APT_TODO[@]}")
 
     info "$label: installing ${#todo[@]} package(s)..."
     if apt_simulate "${todo[@]}" && apt_do_install "${todo[@]}"; then
         ok "$label: done"
         return 0
     fi
-    [[ "$mode" == required ]] && die "$label: APT cannot install these safely: ${APT_REASON:-install failed} (nothing was removed)"
 
-    warn "$label: batch install not possible (${APT_REASON:-install failed}); retrying package by package"
-    for pkg in "${todo[@]}"; do
-        pkg_installed "$pkg" && continue
-        if apt_simulate "$pkg"; then
-            good+=("$pkg")
-        else
-            warn "$label: skipped $pkg ($APT_REASON)"
-        fi
-    done
-    ((${#good[@]})) || return 0
-    if apt_simulate "${good[@]}" && apt_do_install "${good[@]}"; then
-        ok "$label: done (with skips)"
+    info "$label: not all of them can be installed as-is; checking which can..."
+    APT_GOOD=(); APT_BLOCKED=(); APT_BROKEN=(); APT_REMOVALS=''
+    apt_partition "${todo[@]}"
+    if ((${#APT_BLOCKED[@]})); then
+        removals="$(tr ' ' '\n' <<< "$APT_REMOVALS" | sed '/^$/d' | sort -u | tr '\n' ' ')"
+        BLOCKED_TOTAL=$(( BLOCKED_TOTAL + ${#APT_BLOCKED[@]} ))
+        warn "$label: skipped $(words "${APT_BLOCKED[@]}") (installing would remove: ${removals% })"
+    fi
+    if ((${#APT_BROKEN[@]})); then
+        warn "$label: skipped, dependency problems in the repository: $(words "${APT_BROKEN[@]}")"
+    fi
+    ((${#APT_GOOD[@]})) || return 0
+    if apt_simulate "${APT_GOOD[@]}" && apt_do_install "${APT_GOOD[@]}"; then
+        ok "$label: done (some packages skipped, see notes)"
         return 0
     fi
-    for pkg in "${good[@]}"; do
+    # Last resort: one at a time, each simulated again first.
+    for pkg in "${APT_GOOD[@]}"; do
         pkg_installed "$pkg" && continue
         if apt_simulate "$pkg" && apt_do_install "$pkg"; then
             :
         else
-            warn "$label: could not install $pkg"
+            warn "$label: could not install $pkg (${APT_REASON:-install failed})"
         fi
     done
+    return 0
+}
+
+# The one hard requirement. Falls back to plain i3 when Kali's i3 desktop
+# metapackage cannot be installed without removing something.
+install_window_manager() {
+    local wm_only="${WM_FALLBACK_PACKAGES[0]}"
+    if pkg_installed "$WM_PACKAGE" || pkg_installed "$wm_only"; then
+        ok 'Window manager: i3 already installed'
+        return 0
+    fi
+    info "Window manager: installing $WM_PACKAGE..."
+    if apt_available "$WM_PACKAGE" && apt_simulate "$WM_PACKAGE" && apt_do_install "$WM_PACKAGE"; then
+        ok "Window manager: $WM_PACKAGE"
+        return 0
+    fi
+    [[ "$APT_REASON" == 'would remove: '* ]] && BLOCKED_TOTAL=$(( BLOCKED_TOTAL + 1 ))
+    warn "Window manager: $WM_PACKAGE cannot be installed safely (${APT_REASON:-not in your repositories}); trying plain i3 instead"
+    if apt_simulate "${WM_FALLBACK_PACKAGES[@]}" && apt_do_install "${WM_FALLBACK_PACKAGES[@]}"; then
+        ok 'Window manager: i3'
+        return 0
+    fi
+    if apt_simulate "$wm_only" && apt_do_install "$wm_only"; then
+        ok 'Window manager: i3'
+        return 0
+    fi
+    die "i3 cannot be installed without removing other packages (${APT_REASON:-install failed}).
+    Nothing was removed. Bring Kali up to date first, then run ./install.sh again:
+        sudo apt update && sudo apt full-upgrade -y && sudo reboot"
+}
+
+# Kali is a rolling release: if it has not been upgraded for a while, newer
+# packages need newer libraries than the installed ones. Explain that before
+# anything is installed instead of failing halfway.
+preflight_packages() {
+    local answer upgrades
+    local -a everything=("$WM_PACKAGE" "${CORE_PACKAGES[@]}" "${PYTHON_TOOLING_PACKAGES[@]}" \
+        "${DESKTOP_PACKAGES[@]}" "${KALI_META_PACKAGES[@]}" "${SECURITY_PACKAGES[@]}")
+    info 'Checking what can be installed...'
+    apt_load_candidates "${everything[@]}"
+    apt_collect_todo '' "${everything[@]}"
+    ((${#APT_TODO[@]})) || return 0
+    local -a pool=("${APT_TODO[@]}") broken=() keep=()
+    local -A drop=()
+    local _ pkg
+    # A package with broken dependencies makes APT stop before it reports
+    # removals, so drop the ones it names and look again (a few rounds).
+    for _ in 1 2 3 4 5; do
+        if apt_simulate "${pool[@]}"; then
+            ok "All ${#APT_TODO[@]} missing package(s) can be installed"
+            return 0
+        fi
+        [[ "$APT_REASON" == 'would remove: '* ]] && break
+        mapfile -t broken < <(grep -oE '^ [^ ]+ :' <<< "$APT_LAST_OUT" | awk '{print $1}' | sed 's/:.*$//')
+        ((${#broken[@]})) || return 0
+        drop=()
+        for pkg in "${broken[@]}"; do drop["$pkg"]=1; done
+        keep=()
+        for pkg in "${pool[@]}"; do [[ -n "${drop[$pkg]+set}" ]] || keep+=("$pkg"); done
+        ((${#keep[@]} < ${#pool[@]})) || return 0
+        pool=("${keep[@]}")
+        ((${#pool[@]})) || return 0
+    done
+    [[ "$APT_REASON" == 'would remove: '* ]] || return 0
+
+    upgrades="$(LC_ALL=C apt-get -s -q dist-upgrade 2>/dev/null | grep -c '^Inst ' || true)"
+    printf '\n%s[!] Your Kali is behind its repository%s (%s upgrade(s) waiting).\n' "$C_YELLOW" "$C_RESET" "${upgrades:-?}"
+    printf '    Some new packages need newer versions of what is installed, so APT would\n'
+    printf '    have to remove packages to add them. kali-clean never does that: those\n'
+    printf '    packages are skipped and listed at the end. Everything else is installed.\n'
+    printf '    To get the complete toolset, stop now (n) and run:\n'
+    printf '        %ssudo apt update && sudo apt full-upgrade -y && sudo reboot%s\n' "$C_BOLD" "$C_RESET"
+    printf '    then ./install.sh again.\n\n'
+    if [[ -t 0 ]]; then
+        read -r -p 'Continue now and skip those packages? [Y/n] ' answer || answer=''
+        if [[ "$answer" =~ ^[Nn] ]]; then
+            info 'Stopped before installing anything.'
+            exit 0
+        fi
+    fi
     return 0
 }
 
@@ -307,14 +460,17 @@ install_packages() {
     sudo apt-get update -q || die 'apt-get update failed. Check your network and /etc/apt/sources.list.'
     apt_health
     ok 'APT/dpkg are healthy'
+    preflight_packages
 
-    apt_install_set 'Desktop core' required "${CORE_PACKAGES[@]}"
-    apt_install_set 'Desktop extras' optional "${DESKTOP_PACKAGES[@]}"
+    install_window_manager
+    apt_install_set 'Desktop core' "${CORE_PACKAGES[@]}"
+    apt_install_set 'Python tooling' "${PYTHON_TOOLING_PACKAGES[@]}"
+    apt_install_set 'Desktop extras' "${DESKTOP_PACKAGES[@]}"
     if is_vmware; then
-        apt_install_set 'VMware integration' optional open-vm-tools-desktop
+        apt_install_set 'VMware integration' open-vm-tools-desktop
     fi
-    apt_install_set 'Kali default toolset' optional "${KALI_META_PACKAGES[@]}"
-    apt_install_set 'HTB/CPTS toolset' optional "${SECURITY_PACKAGES[@]}"
+    apt_install_set 'Kali default toolset' "${KALI_META_PACKAGES[@]}"
+    apt_install_set 'HTB/CPTS toolset' "${SECURITY_PACKAGES[@]}"
     apt_health
 }
 
@@ -338,27 +494,52 @@ i3_config_ok() {
     return 0
 }
 
-validate_shipped_configs() {
-    local f sock="kc-check-$$" out
-    info 'Validating the new configuration before installing it...'
-    for f in "$SCRIPT_DIR"/.config/i3/scripts/*.sh "$SCRIPT_DIR/.fehbg"; do
+# tmux_config_ok FILE — load FILE into a private, throwaway tmux server.
+tmux_config_ok() {
+    local sock="kc-check-$$-$RANDOM" out rc=0
+    out="$(tmux -L "$sock" -f /dev/null new-session -d -s check 'sleep 10' \; source-file "$1" 2>&1)" || rc=$?
+    tmux -L "$sock" kill-server >/dev/null 2>&1 || true
+    ((rc == 0)) || printf '%s\n' "$out" >&2
+    return "$rc"
+}
+
+# check_configs DIR — validate the configuration files found under DIR
+# (the repository before installing, your home directory afterwards).
+check_configs() {
+    local dir=$1 f
+    for f in "$dir"/.config/i3/scripts/*.sh "$dir/.fehbg"; do
         bash -n "$f" || die "Syntax error in $f"
     done
-    zsh -n "$SCRIPT_DIR/.zshrc" || die 'zsh rejected .zshrc'
-    zsh -n "$SCRIPT_DIR/.config/kali-clean/env-sync.zsh" || die 'zsh rejected env-sync.zsh'
-    for f in "$SCRIPT_DIR/.config/i3/status.py" "$SCRIPT_DIR/.config/kali-clean/kcinfo.py" "$SCRIPT_DIR/.config/kali-clean/env-sync.py"; do
+    if have zsh; then
+        zsh -n "$dir/.zshrc" || die "zsh rejected $dir/.zshrc"
+        zsh -n "$dir/.config/kali-clean/env-sync.zsh" || die "zsh rejected $dir/.config/kali-clean/env-sync.zsh"
+    fi
+    for f in "$dir/.config/i3/status.py" "$dir/.config/kali-clean/kcinfo.py" "$dir/.config/kali-clean/env-sync.py"; do
         python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' "$f" || die "Python rejected $f"
     done
-    python3 -c 'import sys,tomllib; tomllib.load(open(sys.argv[1],"rb"))' "$SCRIPT_DIR/.config/alacritty/alacritty.toml" \
-        || die 'alacritty.toml is not valid TOML'
+    python3 - "$dir/.config/alacritty/alacritty.toml" <<'PY' || die "$dir/.config/alacritty/alacritty.toml is not valid TOML"
+import sys
+try:
+    import tomllib
+except ImportError:  # Python < 3.11: nothing to check with
+    sys.exit(0)
+with open(sys.argv[1], "rb") as fh:
+    tomllib.load(fh)
+PY
+    if have i3; then
+        i3_config_ok "$dir/.config/i3/config" || die "i3 rejected $dir/.config/i3/config"
+    fi
+    if have tmux; then
+        tmux_config_ok "$dir/.tmux.conf" || die "tmux rejected $dir/.tmux.conf"
+    fi
+    return 0
+}
+
+validate_shipped_configs() {
+    info 'Validating the new configuration before installing it...'
+    check_configs "$SCRIPT_DIR"
     python3 -c 'import json,sys; json.load(open(sys.argv[1]))' "$SCRIPT_DIR/.config/firefox/foxyproxy-managed.json" \
         || die 'foxyproxy-managed.json is not valid JSON'
-    i3_config_ok "$SCRIPT_DIR/.config/i3/config" || die 'i3 rejected the shipped i3 config'
-    out="$(tmux -L "$sock" -f /dev/null new-session -d -s check 'sleep 10' \; source-file "$SCRIPT_DIR/.tmux.conf" 2>&1)" || {
-        tmux -L "$sock" kill-server >/dev/null 2>&1 || true
-        die "tmux rejected .tmux.conf: $out"
-    }
-    tmux -L "$sock" kill-server >/dev/null 2>&1 || true
     ok 'Configuration is valid'
 }
 
@@ -443,7 +624,11 @@ install_tmux_plugins() {
 
 configure_login_shell() {
     local zsh_path
-    zsh_path="$(command -v zsh)"
+    zsh_path="$(command -v zsh 2>/dev/null || true)"
+    if [[ -z "$zsh_path" ]]; then
+        warn 'zsh is not installed (see the APT notes); login shell unchanged'
+        return 0
+    fi
     if [[ "$(getent passwd "$USER" | cut -d: -f7)" != "$zsh_path" ]]; then
         grep -Fxq "$zsh_path" /etc/shells || { warn "$zsh_path is not in /etc/shells; login shell unchanged"; return 0; }
         info "Setting zsh as the login shell for $USER..."
@@ -862,6 +1047,10 @@ install_git_tools() {
 install_pkinittools() {
     local venv="$TOOLS/venvs/pkinittools" src="$TOOLS/ad/PKINITtools" f
     [[ -d "$src" ]] || return 0
+    if ! python3 -c 'import ensurepip, venv' >/dev/null 2>&1; then
+        warn 'PKINITtools: python3-venv is not installed (see the APT notes); skipped'
+        return 0
+    fi
     if [[ ! -x "$venv/bin/python" ]] || ! "$venv/bin/python" -c 'import minikerberos, oscrypto, impacket' >/dev/null 2>&1; then
         info 'Building the PKINITtools Python environment...'
         rm -rf -- "$venv"
@@ -876,7 +1065,7 @@ install_pkinittools() {
 }
 
 install_pipx_tools() {
-    have pipx || { warn 'pipx missing; Python tools skipped'; return 0; }
+    have pipx || { warn 'pipx is not installed (see the APT notes); pipx tools skipped'; return 0; }
     info 'Installing Python tools with pipx (isolated, in your home)...'
     pipx_get pywhisker 'git+https://github.com/ShutdownRepo/pywhisker.git'
     pipx_get adidnsdump adidnsdump
@@ -972,16 +1161,14 @@ install_tools() {
 # ============================================================== verification
 verify_desktop() {
     section 'Checks'
-    local sock="kc-verify-$$" out
-    i3_config_ok "$HOME/.config/i3/config" || die 'i3 rejected ~/.config/i3/config'
+    check_configs "$HOME"
     python3 "$HOME/.config/i3/status.py" --once >/dev/null || die 'The i3 bar status script failed its self-test'
-    zsh -n "$HOME/.zshrc" || die 'zsh rejected ~/.zshrc'
-    out="$(tmux -L "$sock" -f /dev/null new-session -d -s check 'sleep 10' \; source-file "$HOME/.tmux.conf" 2>&1)" || {
-        tmux -L "$sock" kill-server >/dev/null 2>&1 || true
-        die "tmux rejected ~/.tmux.conf: $out"
-    }
-    tmux -L "$sock" kill-server >/dev/null 2>&1 || true
     bash "$HOME/.config/i3/scripts/set-wallpaper.sh" --check || warn 'Wallpaper check failed'
+    local missing=() tool
+    for tool in alacritty zsh tmux rofi; do
+        have "$tool" || missing+=("$tool")
+    done
+    ((${#missing[@]} == 0)) || warn "Desktop: not installed (see the APT notes): $(words "${missing[@]}")"
     ok 'i3, bar, zsh, tmux and wallpaper checks passed'
 }
 
@@ -1023,6 +1210,12 @@ print_summary() {
     if [[ -s "$ISSUES_FILE" ]]; then
         printf '\n%sNotes (%s) — nothing here breaks the desktop:%s\n' "$C_YELLOW" "$(wc -l < "$ISSUES_FILE")" "$C_RESET"
         sed 's/^/  - /' "$ISSUES_FILE"
+    fi
+    if ((BLOCKED_TOTAL > 0)); then
+        printf '\n%s%s package(s) were skipped because installing them would have removed\n' "$C_YELLOW" "$BLOCKED_TOTAL"
+        printf 'packages you have (Kali is behind its repository). To add them:%s\n' "$C_RESET"
+        printf '    sudo apt update && sudo apt full-upgrade -y && sudo reboot\n'
+        printf '    then run ./install.sh again (it only adds what is missing).\n'
     fi
     printf '\n%sBloodHound CE is installed but not set up; when you need it: sudo bloodhound-setup%s\n' "$C_DIM" "$C_RESET"
 }
