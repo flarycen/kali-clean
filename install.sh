@@ -9,9 +9,10 @@
 #     run with --no-remove; anything that would remove something is skipped.
 #   * Installed packages are not upgraded (--no-upgrade); existing config
 #     files are kept (--force-confold).
-#   * No system configuration changes (only `chsh` to zsh, if needed), no
-#     services, no boot/network changes. Everything else lives in your home
-#     directory, and replaced dotfiles are backed up.
+#   * No system configuration changes besides `chsh` to zsh (if needed) and
+#     adding you to the docker group (for bloodhound-cli); no services enabled,
+#     no boot/network changes. Everything else lives in your home directory,
+#     and replaced dotfiles are backed up.
 #   * Only the desktop basics are mandatory. Every tool is best-effort: a
 #     missing package or a failed download is reported, never fatal.
 #   * Safe to re-run: existing tools are kept, missing ones are added.
@@ -471,7 +472,21 @@ install_packages() {
     fi
     apt_install_set 'Kali default toolset' "${KALI_META_PACKAGES[@]}"
     apt_install_set 'HTB/CPTS toolset' "${SECURITY_PACKAGES[@]}"
+    install_docker_packages
     apt_health
+}
+
+# Docker engine and the Compose v2 plugin, for bloodhound-cli. Whatever Docker
+# you already have (e.g. docker-ce from Docker's own repository) is kept.
+install_docker_packages() {
+    local -a pkgs=()
+    have docker || pkgs+=(docker.io)
+    docker compose version >/dev/null 2>&1 || pkgs+=(docker-compose)
+    if ((${#pkgs[@]})); then
+        apt_install_set 'Docker (bloodhound-cli)' "${pkgs[@]}"
+    else
+        ok 'Docker and Compose v2 are already installed'
+    fi
 }
 
 # ============================================================== dotfiles
@@ -507,7 +522,7 @@ tmux_config_ok() {
 # (the repository before installing, your home directory afterwards).
 check_configs() {
     local dir=$1 f
-    for f in "$dir"/.config/i3/scripts/*.sh "$dir/.fehbg"; do
+    for f in "$dir"/.config/i3/scripts/*.sh "$dir/.fehbg" "$dir/.config/kali-clean/bloodhound-cli.sh"; do
         bash -n "$f" || die "Syntax error in $f"
     done
     sh -n "$dir/.config/kali-clean/clip-in.sh" || die "Syntax error in $dir/.config/kali-clean/clip-in.sh"
@@ -565,12 +580,13 @@ install_dotfiles() {
 
     # kali-clean helpers; session.env (your persisted variables) is kept.
     mkdir -p -- "$HOME/.config/kali-clean"
-    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh clipcheck.py; do
+    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh clipcheck.py bloodhound-cli.sh; do
         backup_path "$HOME/.config/kali-clean/$name"
         install -m 0644 -- "$SCRIPT_DIR/.config/kali-clean/$name" "$HOME/.config/kali-clean/$name"
     done
     chmod 0755 "$HOME/.config/kali-clean/env-sync.py" "$HOME/.config/kali-clean/kcinfo.py" \
-        "$HOME/.config/kali-clean/clip-in.sh" "$HOME/.config/kali-clean/clipcheck.py"
+        "$HOME/.config/kali-clean/clip-in.sh" "$HOME/.config/kali-clean/clipcheck.py" \
+        "$HOME/.config/kali-clean/bloodhound-cli.sh"
     # Leftovers of the old theme switcher.
     for name in themes current theme apply-theme.sh theme-menu.sh; do
         dst="$HOME/.config/kali-clean/$name"
@@ -1221,6 +1237,69 @@ install_release_binaries() {
     ok 'Release binaries: kerbrute, windapsearch, potatoes, RunasCs, LaZagne, PrivescCheck, PingCastle, Sysinternals'
 }
 
+# bloodhound-cli (SpecterOps) runs BloodHound CE in Docker. The command is the
+# kali-clean wrapper ~/.config/kali-clean/bloodhound-cli.sh, which starts Docker
+# when a command needs it and covers the docker group until your next login.
+install_bloodhound_cli() {
+    local arch dl tmp
+    case "$(dpkg --print-architecture 2>/dev/null)" in
+        amd64) arch=amd64 ;;
+        arm64) arch=arm64 ;;
+        *) warn 'bloodhound-cli: no release for this CPU architecture'; return 0 ;;
+    esac
+    dl="$MANAGED_BIN/dl/bloodhound-cli-linux-$arch.tar.gz"
+    gh_release SpecterOps/bloodhound-cli '^bloodhound-cli-linux-'"$arch"'\.tar\.gz$' "$MANAGED_BIN/dl"
+    [[ -s "$dl" ]] || return 0
+    tmp="$(mktemp -d)"
+    if tar -xzf "$dl" -C "$tmp" bloodhound-cli 2>/dev/null && [[ -s "$tmp/bloodhound-cli" ]]; then
+        install -m 0755 -- "$tmp/bloodhound-cli" "$MANAGED_BIN/bloodhound-cli"
+    fi
+    rm -rf -- "$tmp"
+    if [[ ! -x "$MANAGED_BIN/bloodhound-cli" ]]; then
+        warn 'bloodhound-cli: the release archive did not contain the program'
+        return 0
+    fi
+    wrap bloodhound-cli bash "$HOME/.config/kali-clean/bloodhound-cli.sh" || true
+    configure_bloodhound_cli
+    join_docker_group
+    if have docker && ! docker compose version >/dev/null 2>&1; then
+        warn 'bloodhound-cli needs Docker Compose v2: sudo apt install docker-compose'
+    elif ! have docker && ! have podman; then
+        warn 'bloodhound-cli needs Docker: sudo apt install docker.io docker-compose'
+    fi
+    ok 'bloodhound-cli: BloodHound CE in Docker (bloodhound-cli install, UI http://127.0.0.1:8888)'
+}
+
+# First-time defaults only; an existing bloodhound-cli setup is left alone.
+configure_bloodhound_cli() {
+    local dir="$HOME/.config/bloodhound"
+    [[ -e "$dir/.env" || -e "$dir/bloodhound.config.json" ]] && return 0
+    mkdir -p -- "$dir"
+    cat > "$dir/.env" <<'EOF'
+# kali-clean defaults for bloodhound-cli; Docker Compose reads this file.
+# BloodHound UI on 127.0.0.1:8888, so 8080 stays free for Burp.
+BLOODHOUND_PORT=8888
+# neo4j off 7474/7687, which Kali's own bloodhound package (neo4j) uses.
+NEO4J_WEB_PORT=7475
+NEO4J_DB_PORT=7688
+EOF
+    "$MANAGED_BIN/bloodhound-cli" config set root_url http://127.0.0.1:8888 >/dev/null 2>&1 \
+        || warn 'bloodhound-cli: run once: bloodhound-cli config set root_url http://127.0.0.1:8888'
+}
+
+# bloodhound-cli talks to Docker as you, which takes the docker group (Kali's
+# documented setup). A login session picks it up at the next login; the wrapper
+# covers the current one.
+join_docker_group() {
+    getent group docker >/dev/null 2>&1 || return 0
+    id -nG "$USER" | tr ' ' '\n' | grep -qx docker && return 0
+    if sudo usermod -aG docker "$USER"; then
+        ok "Added $USER to the docker group (for bloodhound-cli)"
+    else
+        warn "Could not add $USER to the docker group; bloodhound-cli will say how"
+    fi
+}
+
 link_transfer_dirs() {
     local w="$TOOLS/windows" l="$TOOLS/linux" p="$TOOLS/pivot"
     safe_link /usr/share/windows-resources "$w/kali-windows-resources"
@@ -1255,6 +1334,7 @@ install_tools() {
     optional 'PKINITtools' install_pkinittools
     optional 'pipx tools' install_pipx_tools
     optional 'Release binaries' install_release_binaries
+    optional 'bloodhound-cli' install_bloodhound_cli
     optional 'Command names' install_command_names
     optional 'Transfer folders' link_transfer_dirs
 }
@@ -1278,7 +1358,8 @@ verify_desktop() {
 readonly -a EXPECTED_COMMANDS=(
     nmap rustscan masscan autorecon ffuf gobuster feroxbuster dirsearch wfuzz whatweb nikto wpscan sqlmap burpsuite
     nxc netexec crackmapexec cme evil-winrm evil-winrm-py certipy-ad certipy bloodyad bloodhound-ce-python
-    bloodhound-python bloodhound-start kerbrute windapsearch windapsearch.py ldapsearch ldapdomaindump ldeep
+    bloodhound-python bloodhound-start bloodhound-cli docker kerbrute windapsearch windapsearch.py ldapsearch
+    ldapdomaindump ldeep
     enum4linux enum4linux-ng smbclient smbmap rpcclient responder Responder.py mitm6 coercer krbrelayx.py
     PetitPotam.py gettgtpkinit.py getnthash.py targetedKerberoast.py pywhisker gMSADumper.py noPac.py
     CVE-2021-1675.py adidnsdump snaffler secretsdump.py GetUserSPNs.py GetNPUsers.py psexec.py wmiexec.py
@@ -1320,7 +1401,8 @@ print_summary() {
         printf '    sudo apt update && sudo apt full-upgrade -y && sudo reboot\n'
         printf '    then run ./install.sh again (it only adds what is missing).\n'
     fi
-    printf '\n%sBloodHound CE is installed but not set up; when you need it: sudo bloodhound-setup%s\n' "$C_DIM" "$C_RESET"
+    printf '\n%sBloodHound CE: bloodhound-cli install (Docker, UI http://127.0.0.1:8888), or Kali'"'"'s own: sudo bloodhound-setup%s\n' \
+        "$C_DIM" "$C_RESET"
 }
 
 # ============================================================== main

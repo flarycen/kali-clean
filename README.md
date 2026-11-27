@@ -4,7 +4,7 @@ Minimal i3 workstation for Kali, tailored for HTB / HackSmarter / CPTS-style lab
 
 ## ⚠️ Warning
 
-Built with help from OpenAI's GPT-5.6 Sol and Anthropic's Claude. **Review `install.sh` and the dotfiles yourself before running them.** The installer uses `sudo` for Kali packages and installs offensive-security tooling intended only for systems and labs you are authorized to test. It never removes packages, changes no system configuration besides setting zsh as your login shell (if it isn't already), and backs up every dotfile it replaces.
+Built with help from OpenAI's GPT-5.6 Sol and Anthropic's Claude. **Review `install.sh` and the dotfiles yourself before running them.** The installer uses `sudo` for Kali packages and installs offensive-security tooling intended only for systems and labs you are authorized to test. It never removes packages, changes no system configuration besides setting zsh as your login shell (if it isn't already) and adding you to the `docker` group (for bloodhound-cli), and backs up every dotfile it replaces.
 
 ## Install
 
@@ -41,7 +41,7 @@ If it says your Kali is behind its repository, packages that would need to remov
 - Picom is **not started**: this avoids the Thunar/GTK repaint bug confirmed under VMware
 - VMware's user agent is started by i3 so host/guest clipboard and drag/drop work, and the desktop follows the VMware window size (dynamic resolution, fullscreen included)
 
-The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE (with the CE and legacy Python collectors), NetExec, CrackMapExec, Certipy, bloodyAD, Evil-WinRM / evil-winrm-py, Impacket, Responder, Kerbrute, windapsearch, PKINITtools, targetedKerberoast, pywhisker, krbrelayx, Coercer, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients, plus ready-to-upload binaries for targets (SharpCollection, winPEAS / linPEAS, pspy, potatoes, RunasCs, Sysinternals, ...).
+The toolset includes the Kali-default stack plus CPTS/HTB essentials such as SecLists, BloodHound CE (Kali's package, plus bloodhound-cli in Docker on 127.0.0.1:8888; CE and legacy Python collectors), NetExec, CrackMapExec, Certipy, bloodyAD, Evil-WinRM / evil-winrm-py, Impacket, Responder, Kerbrute, windapsearch, PKINITtools, targetedKerberoast, pywhisker, krbrelayx, Coercer, Penelope, Ligolo-ng, Chisel, Kerberos prerequisites, web tooling, wordlists and common service clients, plus ready-to-upload binaries for targets (SharpCollection, winPEAS / linPEAS, pspy, potatoes, RunasCs, Sysinternals, ...).
 
 ## Look
 
