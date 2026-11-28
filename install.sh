@@ -1403,6 +1403,10 @@ print_summary() {
     fi
     printf '\n%sBloodHound CE: bloodhound-cli install (Docker, UI http://127.0.0.1:8888), or Kali'"'"'s own: sudo bloodhound-setup%s\n' \
         "$C_DIM" "$C_RESET"
+    if is_vmware; then
+        printf '%sWindows host: host/vmware-hotkey-guard.ps1 stops VMware'"'"'s Ctrl+E/R/Z from powering off, resetting or suspending this VM (README)%s\n' \
+            "$C_DIM" "$C_RESET"
+    fi
 }
 
 # ============================================================== main

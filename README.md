@@ -22,6 +22,13 @@ Choose a wallpaper, wait for the success message, reboot, then select **i3** fro
 
 If it says your Kali is behind its repository, packages that would need to remove something are skipped. For the full toolset run `sudo apt update && sudo apt full-upgrade -y && sudo reboot`, then `./install.sh` again.
 
+On the Windows host, run this once in PowerShell so VMware's Ctrl+E (Power Off), Ctrl+R (Reset) and Ctrl+Z (Suspend) can't hit the VM when it doesn't have the keyboard. It sits in the tray and starts at login; inside the VM the keys keep working:
+
+```powershell
+iwr -UseBasicParsing https://raw.githubusercontent.com/flarycen/kali-clean/main/host/vmware-hotkey-guard.ps1 -OutFile $env:TEMP\vmware-hotkey-guard.ps1
+powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\vmware-hotkey-guard.ps1 -Install
+```
+
 ## QoL
 
 - `Mod+Enter` — terminal in the focused window's cwd
