@@ -472,8 +472,25 @@ install_packages() {
     fi
     apt_install_set 'Kali default toolset' "${KALI_META_PACKAGES[@]}"
     apt_install_set 'HTB/CPTS toolset' "${SECURITY_PACKAGES[@]}"
+    install_hashcat_runtime
     install_docker_packages
     apt_health
+}
+
+# hashcat needs an OpenCL runtime, and a VM has no GPU it can use, so it cracks on
+# the CPU: through PoCL, or through Mesa's rusticl on a Kali snapshot without PoCL
+# (.zshrc then sets RUSTICL_ENABLE=llvmpipe, without which rusticl shows no device).
+install_hashcat_runtime() {
+    have hashcat || return 0
+    if pkg_installed pocl-opencl-icd || apt_available pocl-opencl-icd; then
+        apt_install_set 'hashcat CPU runtime (PoCL)' pocl-opencl-icd
+        if pkg_installed pocl-opencl-icd; then return 0; fi
+    fi
+    if pkg_installed mesa-opencl-icd || apt_available mesa-opencl-icd; then
+        apt_install_set 'hashcat CPU runtime (Mesa rusticl)' mesa-opencl-icd
+        if pkg_installed mesa-opencl-icd; then return 0; fi
+    fi
+    warn 'hashcat: no OpenCL CPU runtime could be installed (pocl-opencl-icd or mesa-opencl-icd), so it has no device to crack on'
 }
 
 # Docker engine and the Compose v2 plugin, for bloodhound-cli. Whatever Docker
@@ -1382,6 +1399,24 @@ report_commands() {
     ok "$(( ${#EXPECTED_COMMANDS[@]} - ${#missing[@]} ))/${#EXPECTED_COMMANDS[@]} key commands available from any directory"
 }
 
+# hashcat -I lists the devices it can crack on. None means every attack stops at once.
+check_hashcat() {
+    have hashcat || return 0
+    local out devices
+    local -a envs=()
+    # The same switch .zshrc makes: Mesa's rusticl on its own shows no device without it.
+    if [[ -e /etc/OpenCL/vendors/rusticl.icd && ! -e /etc/OpenCL/vendors/pocl.icd ]]; then
+        envs=("RUSTICL_ENABLE=${RUSTICL_ENABLE:-llvmpipe}")
+    fi
+    out="$(cd /tmp && env "${envs[@]}" timeout 120 hashcat -I 2>&1 || true)"
+    devices="$(grep -c 'Backend Device ID' <<< "$out" || true)"
+    if ((devices > 0)); then
+        ok "hashcat: $devices OpenCL device(s) to crack on (hashcat -I)"
+    else
+        warn 'hashcat: no OpenCL device, so every attack stops at once. Fix: sudo apt install pocl-opencl-icd'
+    fi
+}
+
 print_summary() {
     printf '\n%s%sDone.%s Reboot (or log out) and pick %si3%s at the login screen.\n\n' \
         "$C_BOLD" "$C_GREEN" "$C_RESET" "$C_BOLD" "$C_RESET"
@@ -1433,6 +1468,7 @@ main() {
 
     verify_desktop
     report_commands
+    optional 'hashcat check' check_hashcat
     print_summary
 }
 

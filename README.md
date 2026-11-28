@@ -44,6 +44,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\vmware-hotkey-guar
 - `export ip=...` (or `target 10.10.11.23`), `ip2=...`, `domain=...`, etc. persist across zsh/tmux sessions until changed or unset; `ip` also shows in both bars
 - every tool runs from any directory, including the Academy spellings: `secretsdump.py`, `GetUserSPNs.py`, `ssh2john.py`, `gettgtpkinit.py`, `targetedKerberoast.py`, `evil-winrm.py`, ... and `sudo ntlmrelayx.py` works
 - `serve` — HTTP server for the current directory that prints `wget` / `iwr` commands for your VPN IP
+- `hashcat` cracks on the VM's CPU (PoCL; a VM has no GPU for it) and stops a swapped hash file and wordlist, printing the fixed command
 - `~/htb`, `~/hacksmarter`, `~/vpn`, `~/tools`, `~/wordlists` are created automatically; `~/tools/README.txt` maps the Windows, Linux and pivoting binaries
 - Picom is **not started**: this avoids the Thunar/GTK repaint bug confirmed under VMware
 - VMware's user agent is started by i3 so host/guest clipboard and drag/drop work, and the desktop follows the VMware window size (dynamic resolution, fullscreen included)

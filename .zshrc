@@ -35,6 +35,12 @@ if [[ -z "${DOCKER_HOST:-}" && -n "${XDG_RUNTIME_DIR:-}" && -S "$XDG_RUNTIME_DIR
     export DOCKER_HOST="unix://$XDG_RUNTIME_DIR/podman/podman.sock"
 fi
 
+# hashcat in a VM cracks on the CPU. PoCL needs nothing; Mesa's rusticl (what the
+# installer falls back to when Kali has no PoCL) shows its CPU device only when asked.
+if [[ -z "${RUSTICL_ENABLE:-}" && -e /etc/OpenCL/vendors/rusticl.icd && ! -e /etc/OpenCL/vendors/pocl.icd ]]; then
+    export RUSTICL_ENABLE=llvmpipe
+fi
+
 [[ -o interactive ]] || return 0
 
 # ------------------------------------------------------------------ history
@@ -219,6 +225,64 @@ target() {
     else
         print -r -- "${ip:-no target set (target 10.10.11.23)}"
     fi
+}
+
+# hashcat takes the hashes first, then the wordlist. Swapped, it reads rockyou.txt as
+# 14 million broken hashes, so stop and print the fixed command instead.
+# `command hashcat ...` runs it exactly as typed.
+hashcat() {
+    # hashcat 8.0.0's options that take a value (-m 5600, --session NAME, ...)
+    local -a valued=(attack-mode backend-devices backend-devices-virtmulti backend-devices-virthost
+        backend-vector-width bypass-delay bypass-threshold benchmark-max benchmark-min bitmap-max
+        bitmap-min bridge-parameter{1..4} cache-path cpu-affinity custom-charset{1..8} debug-file
+        debug-mode encoding-from encoding-to generate-rules generate-rules-func-max
+        generate-rules-func-min generate-rules-func-sel generate-rules-seed hwmon-temp-abort
+        hash-recipe hash-type hook-threads increment-max increment-min induction-dir kernel-accel
+        kernel-loops kernel-threads limit lookup markov-hcstat2 markov-threshold
+        metal-compiler-runtime opencl-device-types outfile outfile-check-dir outfile-check-timer
+        outfile-format potfile-path remove-timer restore-file-path rule-left rule-right rules-file
+        runtime separator seperator session skip spin-damp status-timer stdin-count
+        stdin-timeout-abort workload-profile brain-client-features brain-server-timer brain-host
+        brain-port brain-password brain-session brain-session-whitelist encrypt-with-pubkey)
+    local -i i value=0 ended=0 first=0 second=0
+    local arg opt
+    # Find the first two arguments that are not options or option values.
+    for (( i = 1; i <= $#; i++ )); do
+        arg=$argv[i]
+        if (( value )); then value=0; continue; fi
+        if (( ! ended )) && [[ $arg == -?* ]]; then
+            case $arg in
+                --) ended=1 ;;
+                --*=*) ;;
+                --*) (( ${valued[(Ie)${arg#--}]} )) && value=1 ;;
+                *)  opt=${arg#-}    # -m 5600, -m5600, -Ow 3, -Ow3
+                    while [[ -n $opt ]]; do
+                        if [[ $opt[1] == [1-8DRTYadgjklmnoprstuw] ]]; then
+                            [[ -n $opt[2,-1] ]] || value=1
+                            break
+                        fi
+                        opt=$opt[2,-1]
+                    done ;;
+            esac
+            continue
+        fi
+        if (( ! first )); then first=i; else second=i; break; fi
+    done
+    # --stdout has no hashes: there the wordlist does come first.
+    if (( first && ! ${argv[(Ie)--stdout]} )) && [[ -f $argv[first] &&
+            ${argv[first]:A} == (*/wordlists/*|*/seclists/*|*/SecLists/*|*rockyou*) ]]; then
+        print -u2 -r -- "hashcat: $argv[first] is a wordlist, but the hashes come first. Did you mean:"
+        if (( second )); then
+            local -a fixed=("$@")
+            fixed[first]=$argv[second] fixed[second]=$argv[first]
+            print -u2 -r -- "  hashcat ${(j: :)${(q-)fixed[@]}}"
+        else
+            print -u2 -r -- '  hashcat -m MODE HASHFILE WORDLIST'
+        fi
+        print -u2 -r -- '(command hashcat ... runs it exactly as typed)'
+        return 2
+    fi
+    command hashcat "$@"
 }
 
 # sudo: also find kali-clean's ~/.local/bin commands (sudo ntlmrelayx.py, sudo smbserver.py).
