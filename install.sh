@@ -539,7 +539,8 @@ tmux_config_ok() {
 # (the repository before installing, your home directory afterwards).
 check_configs() {
     local dir=$1 f
-    for f in "$dir"/.config/i3/scripts/*.sh "$dir/.fehbg" "$dir/.config/kali-clean/bloodhound-cli.sh"; do
+    for f in "$dir"/.config/i3/scripts/*.sh "$dir/.fehbg" "$dir/.config/kali-clean/bloodhound-cli.sh" \
+             "$dir/.config/kali-clean/clocksync.sh"; do
         bash -n "$f" || die "Syntax error in $f"
     done
     sh -n "$dir/.config/kali-clean/clip-in.sh" || die "Syntax error in $dir/.config/kali-clean/clip-in.sh"
@@ -597,13 +598,15 @@ install_dotfiles() {
 
     # kali-clean helpers; session.env (your persisted variables) is kept.
     mkdir -p -- "$HOME/.config/kali-clean"
-    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh clipcheck.py bloodhound-cli.sh; do
+    for name in env-sync.py env-sync.zsh kcinfo.py clip-in.sh clipcheck.py bloodhound-cli.sh clocksync.sh; do
         backup_path "$HOME/.config/kali-clean/$name"
         install -m 0644 -- "$SCRIPT_DIR/.config/kali-clean/$name" "$HOME/.config/kali-clean/$name"
     done
     chmod 0755 "$HOME/.config/kali-clean/env-sync.py" "$HOME/.config/kali-clean/kcinfo.py" \
         "$HOME/.config/kali-clean/clip-in.sh" "$HOME/.config/kali-clean/clipcheck.py" \
-        "$HOME/.config/kali-clean/bloodhound-cli.sh"
+        "$HOME/.config/kali-clean/bloodhound-cli.sh" "$HOME/.config/kali-clean/clocksync.sh"
+    # clocksync DC_IP: the clock stays on the DC's time for Kerberos (clocksync off undoes it).
+    wrap clocksync bash "$HOME/.config/kali-clean/clocksync.sh" || true
     # Leftovers of the old theme switcher.
     for name in themes current theme apply-theme.sh theme-menu.sh; do
         dst="$HOME/.config/kali-clean/$name"
@@ -1384,7 +1387,7 @@ readonly -a EXPECTED_COMMANDS=(
     hashcat john ssh2john.py office2john.py hydra cewl cupp username-anarchy creds gpp-decrypt
     msfconsole msfvenom searchsploit chisel ligolo-proxy sshuttle proxychains4 socat rlwrap penelope
     xfreerdp3 odat swaks smtp-user-enum onesixtyone snmpwalk ipmitool linpeas wes uploadserver goshs
-    git-dumper firefox_decrypt.py
+    git-dumper firefox_decrypt.py clocksync
 )
 
 report_commands() {
